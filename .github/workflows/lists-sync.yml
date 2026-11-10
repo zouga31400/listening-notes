@@ -1,0 +1,79 @@
+name: Lists sync
+on:
+  push:
+    branches: ["**"]
+    paths: ["lists/**"]
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "File to (re)process, e.g. lists/rock-90.txt"
+        required: true
+
+concurrency:
+  group: lists-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  lists:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
+      MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
+      MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
+      MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install requests
+        run: pip install requests
+      - name: Create or complete the playlists
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          FILE: ${{ github.event.inputs.file }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C.UTF-8
+          files=()
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            files=("$FILE")
+          else
+            if [ -n "${BEFORE:-}" ] && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+               && git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+              base="$BEFORE"
+            elif git rev-parse -q --verify origin/main >/dev/null \
+                 && base=$(git merge-base origin/main "$GITHUB_SHA" 2>/dev/null) \
+                 && [ "$base" != "$GITHUB_SHA" ]; then
+              :
+            else
+              base=$(git hash-object -t tree /dev/null)   # empty tree: all of lists/
+            fi
+            echo "Comparing: $base..$GITHUB_SHA"
+            # Added, modified, or renamed with changes; a pure move (R100) is skipped.
+            while IFS= read -r -d '' status; do
+              path=""
+              case "$status" in
+                R*|C*) IFS= read -r -d '' _old; IFS= read -r -d '' path
+                       [ "$status" = "R100" ] && path="" ;;
+                A|M)   IFS= read -r -d '' path ;;
+                *)     IFS= read -r -d '' _skip ;;
+              esac
+              case "$path" in
+                lists/*.txt) [ -f "$path" ] && files+=("$path") ;;
+              esac
+            done < <(git -c core.quotePath=false diff -z -M --name-status "$base" "$GITHUB_SHA" -- lists/ listes/)
+          fi
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No list file added or modified."
+            exit 0
+          fi
+          printf 'To process: %s\n' "${files[@]}"
+          python lists_sync.py "${files[@]}"

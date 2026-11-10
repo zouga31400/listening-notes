@@ -1,0 +1,28 @@
+name: Track suggestions
+on:
+  workflow_dispatch:
+    inputs:
+      playlists:
+        description: "Playlists to analyze (comma-separated, * for all; empty = config.txt)"
+        default: ""
+      count:
+        description: "Number of suggestions per playlist (empty = config.txt)"
+        default: ""
+
+jobs:
+  suggestions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
+      MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
+      MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
+      MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
+      PLAYLISTS: ${{ github.event.inputs.playlists }}
+      COUNT: ${{ github.event.inputs.count }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the tools
+        run: pip install requests
+      - name: Analyze and suggest
+        run: python analyze_playlists.py

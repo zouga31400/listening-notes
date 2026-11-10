@@ -1,0 +1,36 @@
+name: Radio listening
+on:
+  # Started every evening by an external scheduler (GitHub schedules proved unreliable).
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Test length in minutes"
+        default: "5"
+
+concurrency:
+  group: radio-listening
+  cancel-in-progress: false
+
+jobs:
+  listen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
+      MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
+      MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
+      MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
+      STREAM_URL: ${{ secrets.STREAM_URL }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      TEST_MINUTES: ${{ github.event.inputs.minutes }}
+      VERBOSE_LOGS: ${{ vars.VERBOSE_LOGS }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install the tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          pip install shazamio requests
+      - name: Listen, recognize, add
+        run: python radio_listen.py

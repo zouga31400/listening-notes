@@ -1,0 +1,50 @@
+# "Radio listening" configuration
+# Format: key = value. Lines starting with # are ignored.
+# Edit this file directly on GitHub (or ask Claude Code to do it).
+
+# Main playlist: must already exist in the music service.
+main_playlist = Radio Shazam
+
+# To rename the main playlist: put the old name here and the new one above.
+# The script renames it in the music service the next time it runs.
+previous_main_playlist = Github
+
+# Daily and monthly playlists, created automatically if missing.
+# {date} becomes YYYY-MM-DD and {month} becomes YYYY-MM.
+# Leave the value empty to turn the matching playlist off.
+daily_playlist = Radio {date}
+monthly_playlist = Radio {month}
+
+# Notion database for tracks recognized but missing from the service.
+# Database ID (not secret). The token goes in the NOTION_TOKEN GitHub secret.
+notion_missing_db = 0cfa728c14294956be448e18eb460be1
+
+# Notion history database: every recognized track with its estimated start time.
+notion_history_db = 1099479c43a944e0a358727716a0d49b
+
+# Time listening starts, Paris time (HH:MM). The job may be started a little earlier;
+# the script then waits until this time.
+listen_start = 21:00
+
+# Listening frequency, in seconds (minimum 30).
+# listen_interval: normal pace, right after a track.
+# speech_interval: pace after 4 tries without music.
+# A track longer than 2 minutes is always caught at 90 s.
+listen_interval = 45
+speech_interval = 90
+
+# Playlist analysis ("Track suggestions" workflow, started by hand).
+# analyze_playlists: names of your playlists to analyze, comma-separated,
+#   or * for all your playlists except the radio and suggestion ones.
+# suggestions_name: name of the suggestions playlist ({playlist} = analyzed name).
+# suggestions_count: number of tracks suggested per run.
+# suggestions_per_artist: most-played tracks kept per artist (1 = their biggest hit).
+analyze_playlists = moto
+suggestions_name = Suggestions {playlist}
+suggestions_count = 30
+suggestions_per_artist = 1
+
+# Notion database for playlists to create ("Notion lists sync" workflow, every 15 min).
+# One page per playlist: title = playlist name, content = one "Artist - Title" line
+# per track, Status = "To create". Uses the same NOTION_TOKEN secret.
+notion_lists_db = ea8e66660faa4ce299e2f599916f1058

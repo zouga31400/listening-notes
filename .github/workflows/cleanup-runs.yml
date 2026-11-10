@@ -1,0 +1,48 @@
+name: Clean up old runs
+# Deletes workflow runs (and their logs) created before a given time, and the runs
+# of workflows whose file no longer exists, so the Actions page only shows current ones.
+on:
+  workflow_dispatch:
+    inputs:
+      before:
+        description: "Delete runs created before this UTC time (empty = only runs of removed workflows)"
+        default: "2026-11-09T13:22:07Z"
+        required: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Delete old runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.inputs.before }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BEFORE" ] && ! date -u -d "$BEFORE" >/dev/null 2>&1; then
+            echo "Unreadable time: $BEFORE"; exit 1
+          fi
+          gh api --paginate "repos/$REPO/actions/runs?per_page=100" \
+            --jq '.workflow_runs[] | [.id, .created_at, .path, .name] | @tsv' > runs.tsv
+          deleted=0
+          while IFS=$'\t' read -r id created path name; do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            reason=""
+            if [ -n "$BEFORE" ] && [[ "$created" < "$BEFORE" ]]; then
+              reason="before $BEFORE"
+            elif [[ "$path" == .github/workflows/* ]] && [ ! -f "$path" ]; then
+              reason="workflow file removed"
+            fi
+            [ -z "$reason" ] && continue
+            gh api -X DELETE "repos/$REPO/actions/runs/$id" >/dev/null
+            echo "Deleted: $name ($created) - $reason"
+            deleted=$((deleted + 1))
+          done < runs.tsv
+          echo "$deleted run(s) deleted out of $(wc -l < runs.tsv)."
