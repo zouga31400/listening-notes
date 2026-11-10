@@ -4,8 +4,8 @@ on:
   workflow_dispatch:
     inputs:
       minutes:
-        description: "Test length in minutes"
-        default: "5"
+        description: "Test length in minutes (leave empty for the normal evening run)"
+        default: ""
 
 concurrency:
   group: radio-listening
