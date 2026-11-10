@@ -23,14 +23,36 @@ jobs:
       STREAM_URL: ${{ secrets.STREAM_URL }}
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      STREAM_URL_BACKUP: ${{ secrets.STREAM_URL_BACKUP }}
+      HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
       TEST_MINUTES: ${{ github.event.inputs.minutes }}
       VERBOSE_LOGS: ${{ vars.VERBOSE_LOGS }}
     steps:
       - uses: actions/checkout@v5
+      - name: Restore the cached ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: ~/ffmpeg
+          key: ffmpeg-static-v1
       - name: Install the tools
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg
-          pip install shazamio requests
+          # Prebuilt static ffmpeg, kept in the cache: seconds instead of minutes of apt.
+          if [ ! -x "$HOME/ffmpeg/ffmpeg" ]; then
+            mkdir -p "$HOME/ffmpeg"
+            url=https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz
+            if curl -fsSL --retry 3 -o /tmp/ffmpeg.tar.xz "$url"; then
+              tar -xJf /tmp/ffmpeg.tar.xz -C "$HOME/ffmpeg" --strip-components=2 --wildcards '*/bin/ffmpeg' || true
+            fi
+          fi
+          if [ -x "$HOME/ffmpeg/ffmpeg" ] && "$HOME/ffmpeg/ffmpeg" -hide_banner -version >/dev/null; then
+            echo "$HOME/ffmpeg" >> "$GITHUB_PATH"
+            echo "Static ffmpeg ready"
+          else
+            echo "Static ffmpeg unavailable, falling back to apt"
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ffmpeg
+          fi
+          # Pinned versions: an untested upgrade cannot break an evening.
+          pip install -q shazamio==0.9.0 shazamio-core==2.0.0 requests
       - name: Listen, recognize, add
         run: python radio_listen.py

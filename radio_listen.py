@@ -18,14 +18,22 @@ APP_ID = os.environ.get("MUSIC_APP_ID", "").strip()
 NOTION_API = "https://api.notion.com/v1"
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt")
 STREAM_URL = os.environ.get("STREAM_URL", "").strip()
-if not STREAM_URL:
-    raise SystemExit("STREAM_URL secret is missing or empty")
-if not API or not APP_ID:
-    raise SystemExit("MUSIC_API_URL and/or MUSIC_APP_ID secrets are missing")
+STREAM_URL_BACKUP = os.environ.get("STREAM_URL_BACKUP", "").strip()   # optional
+HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "").strip().rstrip("/")  # optional
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
-EMAIL = os.environ["MUSIC_EMAIL"].strip()
-PASSWORD = os.environ["MUSIC_PASSWORD"].strip()
+EMAIL = os.environ.get("MUSIC_EMAIL", "").strip()
+PASSWORD = os.environ.get("MUSIC_PASSWORD", "").strip()
+TEST_MODE = bool(os.environ.get("TEST_MINUTES", "").strip())
+
+
+def check_secrets():
+    if not STREAM_URL:
+        raise SystemExit("STREAM_URL secret is missing or empty")
+    if not API or not APP_ID:
+        raise SystemExit("MUSIC_API_URL and/or MUSIC_APP_ID secrets are missing")
+    if not EMAIL or not PASSWORD:
+        raise SystemExit("MUSIC_EMAIL and/or MUSIC_PASSWORD secrets are missing")
 SAMPLE_SECONDS = 15
 CYCLE_SECONDS = 45
 SPEECH_CYCLE_SECONDS = 90
@@ -86,6 +94,17 @@ def notify(title, message, tags=(), priority=3):
         if not _ntfy_failed:
             log(f"ntfy notification failed ({type(e).__name__}), continuing without it")
             _ntfy_failed = True
+
+
+def ping(kind=""):
+    """Healthchecks-style ping (secret HEALTHCHECK_URL): "start", "" (success) or "fail".
+    Skipped in test mode so that tests at odd hours do not confuse the schedule."""
+    if not HEALTHCHECK_URL or TEST_MODE:
+        return
+    try:
+        requests.get(f"{HEALTHCHECK_URL}/{kind}" if kind else HEALTHCHECK_URL, timeout=10)
+    except Exception as e:
+        log(f"Healthcheck ping failed ({type(e).__name__})")
 
 
 def load_config():
@@ -272,18 +291,38 @@ def album_date(track):
     return album.get("release_date_original") or "9999"
 
 
-def pick(tracks, artist, title):
+def same_isrc(track, isrc):
+    return bool(isrc) and (track.get("isrc") or "").strip().upper() == isrc
+
+
+def pick(tracks, artist, title, isrc=None):
     """Keeps relevant results (score > 4), then prefers the original album,
-    and on a tie the oldest release."""
+    and on a tie the oldest release. A track with the ISRC given by the recognition
+    is the same recording: it counts as relevant even if its names differ."""
     candidates = []
     for t in tracks:
         s = score(t, artist, title)
+        if same_isrc(t, isrc) and t.get("streamable") is not False:
+            s = max(s, 5)
         if s > 4:
             candidates.append((s + album_bonus(t), album_date(t), t))
     if not candidates:
         return None
     candidates.sort(key=lambda c: (-c[0], c[1]))
     return candidates[0][2]
+
+
+def find_match(service, artist, title, key, isrc=None):
+    """Searches by names, plus by ISRC when the recognition gives one."""
+    tracks = service.search(f"{artist} {search_title(title)}")
+    if isrc:
+        try:
+            known = {t.get("id") for t in tracks}
+            tracks += [t for t in service.search(isrc)
+                       if same_isrc(t, isrc) and t.get("id") not in known]
+        except Exception as e:
+            log(f"   ISRC search failed ({type(e).__name__})")
+    return pick(tracks, key[0], key[1], isrc)
 
 
 def legacy_names(name):
@@ -380,13 +419,13 @@ def describe_ffmpeg_error(stderr):
     return "could not read the stream (unknown cause)"
 
 
-def capture(path):
+def capture(path, url=None):
     # ffmpeg output is captured and never printed: it contains the stream URL.
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error",
              "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-             "-i", STREAM_URL, "-t", str(SAMPLE_SECONDS),
+             "-i", url or STREAM_URL, "-t", str(SAMPLE_SECONDS),
              "-vn", "-acodec", "libmp3lame", path],
             check=True, timeout=SAMPLE_SECONDS + 30, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
@@ -395,6 +434,22 @@ def capture(path):
         raise StreamError("stream too slow (capture did not finish in time)") from None
     except subprocess.CalledProcessError as e:
         raise StreamError(describe_ffmpeg_error(e.stderr)) from None
+
+
+def capture_any(path):
+    """Main stream first, then the backup stream (secret STREAM_URL_BACKUP) if set.
+    Returns "main" or "backup"; raises the main stream's error if both fail."""
+    try:
+        capture(path, STREAM_URL)
+        return "main"
+    except StreamError as main_error:
+        if not STREAM_URL_BACKUP:
+            raise
+        try:
+            capture(path, STREAM_URL_BACKUP)
+            return "backup"
+        except StreamError:
+            raise main_error from None
 
 
 def song_remaining(out, duration, sample_end):
@@ -418,6 +473,34 @@ def compute_wait(started, matched, remaining, misses=0):
         return CYCLE_SECONDS + SKIP_AFTER_MATCH - elapsed
     wait = remaining + NEXT_SONG_MARGIN
     return max(CYCLE_SECONDS - elapsed, min(wait, MAX_SKIP))
+
+
+def daily_pattern(pattern):
+    """Regex matching the names of the daily playlists, with the date as a group."""
+    if not pattern or "{date}" not in pattern:
+        return None
+    before, _, after = pattern.partition("{date}")
+    return re.compile(rf"^{re.escape(before.strip().lower())}\s*(\d{{4}}-\d{{2}}-\d{{2}})\s*"
+                      rf"{re.escape(after.strip().lower())}$")
+
+
+def old_daily_playlists(playlists, pattern, keep_days, today):
+    """Daily playlists older than keep_days, as (id, date) pairs."""
+    regex = daily_pattern(pattern)
+    if regex is None or keep_days <= 0:
+        return []
+    old = []
+    for p in playlists:
+        m = regex.match((p.get("name") or "").strip().lower())
+        if not m:
+            continue
+        try:
+            day = datetime.strptime(m.group(1), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if (today - day).days > keep_days:
+            old.append((p["id"], day))
+    return old
 
 
 EARLY_START_MINUTES = 45   # a scheduled run may start up to this long before listen_start
@@ -452,8 +535,10 @@ def compute_window(config):
 
 
 async def main():
+    check_secrets()
     config = load_config()
     listen_from, end = compute_window(config)
+    ping("start")
     wait = (listen_from - datetime.now(PARIS)).total_seconds()
     if wait > 0:
         log(f"Started early, waiting {int(wait // 60)} min before listening")
@@ -471,6 +556,11 @@ async def main():
             globals()[name] = int(value)
     log(f"Listening every {CYCLE_SECONDS} s, then every {SPEECH_CYCLE_SECONDS} s "
         f"after {MISSES_BEFORE_SPEECH} tries without music")
+    value = config.get("confirmations", "2")
+    confirmations = int(value) if value.isdigit() and int(value) >= 1 else 2
+    log(f"A track is added after {confirmations} matching recognition(s)")
+    if STREAM_URL_BACKUP:
+        log("Backup stream configured")
 
     def open_notion(key, label):
         if not (NOTION_TOKEN and config.get(key)):
@@ -540,17 +630,28 @@ async def main():
     shazam = Shazam()
     seen = set()
     durations = {}
-    recognized = errors_in_row = noted = misses = logged = 0
+    recognized = errors_in_row = noted = misses = logged = unconfirmed = 0
     captures_ok = stream_errors = 0
     outage_start = 0.0
+    on_backup = False
+    pending = None      # first sighting of a track waiting for confirmation
+    recap = []          # "symbol Artist - Title" lines for the end-of-session notification
 
     while datetime.now(PARIS) < end:
         started = time.time()
         matched = False
+        confirming = False
         remaining = None
         try:
             sample_start = datetime.now(PARIS)
-            capture("sample.mp3")
+            source = capture_any("sample.mp3")
+            if (source == "backup") != on_backup:
+                on_backup = source == "backup"
+                log("Using the backup stream" if on_backup else "Back on the main stream")
+                notify("Radio listening: " + ("backup stream" if on_backup else "main stream back"),
+                       "Main stream unavailable, listening to the backup stream."
+                       if on_backup else "Listening to the main stream again.",
+                       tags=["twisted_rightwards_arrows"])
             captures_ok += 1
             if stream_errors:
                 outage = int(time.time() - outage_start)
@@ -562,16 +663,44 @@ async def main():
             sample_end = time.time()
             out = await asyncio.wait_for(shazam.recognize("sample.mp3"), timeout=40)
             track = out.get("track")
+            key = None
+            if track:
+                artist, title = track["subtitle"], track["title"]
+                key = (norm(artist), norm(title))
+            if pending and key != pending["key"]:
+                pending["tries"] += 1
+                if pending["tries"] >= 2:
+                    unconfirmed += 1
+                    log_detail(f"   Not confirmed, ignored: {pending['artist']} - {pending['title']}")
+                    pending = None
             if track:
                 recognized += 1
                 matched = True
-                artist, title = track["subtitle"], track["title"]
-                key = (norm(artist), norm(title))
                 if key not in seen:
-                    log_detail(f"RECOGNIZED: {artist} - {title}")
+                    isrc = (track.get("isrc") or "").strip().upper() or None
+                    if pending and pending["key"] == key:
+                        match, first = pending["match"], pending
+                        pending = None
+                    else:
+                        log_detail(f"RECOGNIZED: {artist} - {title}")
+                        match = find_match(service, artist, title, key, isrc)
+                        first = {"sample_start": sample_start, "out": out}
+                        if match is not None:
+                            durations[key] = match.get("duration")
+                        left = song_remaining(out, durations.get(key), sample_end)
+                        # Ask for a second recognition, unless the song is about to end.
+                        if confirmations > 1 and not (left is not None and left < CYCLE_SECONDS + 20):
+                            if pending:
+                                unconfirmed += 1
+                            pending = {"key": key, "artist": artist, "title": title, "match": match,
+                                       "tries": 0, "sample_start": sample_start, "out": out}
+                            log_detail("   Waiting for a confirmation")
+                            confirming = True
+                    out_first = first["out"]
                     status, album_name, duration = "Not found", None, None
-                    match = pick(service.search(f"{artist} {search_title(title)}"), key[0], key[1])
-                    if match is None:
+                    if confirming:
+                        pass  # decided at the next recognition
+                    elif match is None:
                         log_detail("   No match on the service")
                         if notion:
                             try:
@@ -606,31 +735,36 @@ async def main():
                             log_detail(f"   ADDED ({', '.join(done)}): {label}")
                         else:
                             log_detail("   Already present everywhere")
+                if key not in seen and not confirming:
                     seen.add(key)
                     if status == "Added":
+                        recap.append(f"+ {artist} - {title}")
                         notify(f"{artist} - {title}", f"Added to the playlists. Album: {album_name}",
                                tags=["musical_note"])
                     elif status == "Already present":
+                        recap.append(f"= {artist} - {title}")
                         notify(f"{artist} - {title}",
                                f"Already in the playlists. Album: {album_name}", tags=["repeat"])
                     else:
+                        recap.append(f"? {artist} - {title}")
                         notify(f"{artist} - {title}", "Not found on the service"
                                + (", noted in Notion" if notion else ""), tags=["warning"])
                     if history:
                         try:
-                            offset = float(out["matches"][0]["offset"])
+                            offset = float(out_first["matches"][0]["offset"])
                         except (KeyError, IndexError, TypeError, ValueError):
                             offset = 0
-                        song_start = sample_start - timedelta(seconds=max(0, offset))
+                        song_start = first["sample_start"] - timedelta(seconds=max(0, offset))
                         try:
                             history.add_history(artist, title, song_start, status, album_name,
                                                 duration, track.get("url"))
                             logged += 1
                         except Exception as e:
                             log(f"   Notion history failure ({type(e).__name__})")
-                remaining = song_remaining(out, durations.get(key), sample_end)
-                if remaining is not None:
-                    log_detail(f"   Song estimated to end in {max(0, int(remaining))} s")
+                if not confirming:
+                    remaining = song_remaining(out, durations.get(key), sample_end)
+                    if remaining is not None:
+                        log_detail(f"   Song estimated to end in {max(0, int(remaining))} s")
             errors_in_row = 0
             misses = 0 if matched else misses + 1
         except StreamError as e:
@@ -662,16 +796,21 @@ async def main():
             misses += 1
             if errors_in_row >= 15:
                 log("Too many consecutive errors, stopping.")
+                ping("fail")
                 notify("Radio listening: session failed",
                        f"Too many consecutive errors, stopping. Last one: {detail}",
                        tags=["rotating_light"], priority=5)
                 sys.exit(1)
-        wait = compute_wait(started, matched, remaining, misses)
+        if confirming:
+            wait = CYCLE_SECONDS - (time.time() - started)
+        else:
+            wait = compute_wait(started, matched, remaining, misses)
         wait = min(wait, (end - datetime.now(PARIS)).total_seconds())
         if wait > 0:
             await asyncio.sleep(wait)
 
-    log(f"Listening finished: {recognized} recognitions")
+    log(f"Listening finished: {recognized} recognitions"
+        + (f", {unconfirmed} not confirmed" if unconfirmed else ""))
     if notion:
         log(f"   Notion: {noted} tracks missing from the service noted")
     if history:
@@ -682,22 +821,57 @@ async def main():
                + ", ".join(f"{t['added']} added to {t['name']}" for t in targets))
     if notion:
         summary += f", {noted} missing from the service"
+    if unconfirmed:
+        summary += f", {unconfirmed} not confirmed"
+    cleanup_daily(service, config, start)
     if captures_ok == 0:
+        ping("fail")
         notify("Radio listening: session failed",
                "The stream could never be read: check the STREAM_URL secret.",
                tags=["rotating_light"], priority=5)
         log("The stream could never be read: check the STREAM_URL secret.")
         sys.exit(1)
-    notify("Radio listening: listening finished", summary + ".", tags=["checkered_flag"])
+    lines = "\n".join(recap)
+    if len(lines) > 3500:
+        lines = lines[:3500].rsplit("\n", 1)[0] + "\n…"
+    notify("Radio listening: listening finished",
+           summary + "." + (f"\n\n{lines}" if lines else ""), tags=["checkered_flag"])
+    ping()
 
 
-try:
-    asyncio.run(main())
-except SystemExit as e:
-    if e.code not in (0, None) and not str(e.code).isdigit():
-        notify("Radio listening: session failed", str(e.code), tags=["rotating_light"], priority=5)
-    raise
-except Exception as e:
-    notify("Radio listening: session failed", f"{type(e).__name__}: {str(e)[:300]}",
-           tags=["rotating_light"], priority=5)
-    raise
+def cleanup_daily(service, config, start):
+    """Deletes the daily playlists older than keep_daily_days (config.txt, 0 = never)."""
+    value = config.get("keep_daily_days", "30")
+    keep = int(value) if value.isdigit() else 30
+    if TEST_MODE or keep <= 0:
+        return
+    try:
+        old = old_daily_playlists(service.list_playlists(), config.get("daily_playlist"),
+                                  keep, start.date())
+    except Exception as e:
+        log(f"Daily playlist cleanup skipped ({type(e).__name__})")
+        return
+    deleted = 0
+    for playlist_id, _ in old:
+        try:
+            service.call("POST", "/playlist/delete", playlist_id=playlist_id)
+            deleted += 1
+        except Exception as e:
+            log(f"Could not delete an old daily playlist ({type(e).__name__})")
+    if deleted:
+        log(f"{deleted} daily playlist(s) older than {keep} days deleted")
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except SystemExit as e:
+        if e.code not in (0, None) and not str(e.code).isdigit():
+            ping("fail")
+            notify("Radio listening: session failed", str(e.code), tags=["rotating_light"], priority=5)
+        raise
+    except Exception as e:
+        ping("fail")
+        notify("Radio listening: session failed", f"{type(e).__name__}: {str(e)[:300]}",
+               tags=["rotating_light"], priority=5)
+        raise
