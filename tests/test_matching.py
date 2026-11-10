@@ -77,6 +77,41 @@ class Matching(unittest.TestCase):
         self.assertEqual(r.search_title("Bohemian Rhapsody - Remastered 2011"), "Bohemian Rhapsody")
 
 
+class TrackInfo(unittest.TestCase):
+    def test_main_artist(self):
+        self.assertEqual(r.main_artist("Don Broco & Sam Carter"), "Don Broco")
+        self.assertEqual(r.main_artist("K.Flay feat. Tom Morello"), "K.Flay")
+        self.assertEqual(r.main_artist("Earth, Wind & Fire"), "Earth, Wind")  # full name is tried first
+
+    def test_country_tries_full_name_first(self):
+        asked = []
+
+        def fake(name):
+            asked.append(name)
+            return {"Earth, Wind & Fire": "United States", "Don Broco": "United Kingdom"}.get(name, "")
+
+        original = r._lookup_country
+        r._lookup_country = fake
+        try:
+            self.assertEqual(r.artist_country("Earth, Wind & Fire"), "United States")
+            self.assertEqual(r.artist_country("Don Broco & Sam Carter"), "United Kingdom")
+        finally:
+            r._lookup_country = original
+        self.assertEqual(asked, ["Earth, Wind & Fire", "Don Broco & Sam Carter", "Don Broco"])
+
+    def test_info_from_service_then_recognition(self):
+        match = {"duration": 245, "maximum_bit_depth": 24, "maximum_sampling_rate": 96.0,
+                 "album": {"release_date_original": "1981-07-01", "genre": {"name": "Rock"},
+                           "label": {"name": "Chrysalis"}}}
+        info = r.track_info(match, {})
+        info["country"] = "United States"
+        self.assertEqual(r.info_line(info),
+                         "1981 · Rock · United States · Chrysalis · 24-bit/96 kHz · 4:05")
+        shazam = {"genres": {"primary": "Pop"}, "sections": [{"metadata": [
+            {"title": "Label", "text": "Hungaroton"}, {"title": "Released", "text": "1983"}]}]}
+        self.assertEqual(r.info_line(r.track_info(None, shazam)), "1983 · Pop · Hungaroton")
+
+
 class Housekeeping(unittest.TestCase):
     def test_only_old_daily_playlists_are_deleted(self):
         playlists = [{"name": "Radio 2026-09-01", "id": 1}, {"name": "Radio 2026-10-11", "id": 2},

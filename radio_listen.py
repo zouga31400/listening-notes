@@ -75,7 +75,7 @@ def log_detail(*args):
 _ntfy_failed = False
 
 
-def notify(title, message, tags=(), priority=3):
+def notify(title, message, tags=(), priority=3, click=None):
     """Push notification through ntfy (secret NTFY_TOPIC: a topic name on ntfy.sh,
     or a full https://server/topic URL). Never stops the script if it fails."""
     global _ntfy_failed
@@ -88,7 +88,7 @@ def notify(title, message, tags=(), priority=3):
     try:
         r = requests.post(server, timeout=10, json={
             "topic": topic, "title": title[:250], "message": message[:3000],
-            "tags": list(tags), "priority": priority})
+            "tags": list(tags), "priority": priority, **({"click": click} if click else {})})
         r.raise_for_status()
     except Exception as e:
         if not _ntfy_failed:
@@ -325,6 +325,78 @@ def find_match(service, artist, title, key, isrc=None):
     return pick(tracks, key[0], key[1], isrc)
 
 
+MUSICBRAINZ = "https://musicbrainz.org/ws/2/artist/"
+_countries = {}
+
+
+def main_artist(name):
+    """First artist of "A & B", "A feat. B", "A, B"..."""
+    return re.split(r"\s+(?:&|feat\.?|ft\.?|featuring|x|with|and)\s+", name or "",
+                    flags=re.IGNORECASE)[0].strip()
+
+
+def artist_country(name):
+    """Artist's country from MusicBrainz (public database), cached; "" when unknown.
+    Tries the full name first ("Earth, Wind & Fire"), then the first artist of a duo."""
+    name = (name or "").strip()
+    country = _lookup_country(name)
+    first = main_artist(name)
+    if not country and first and first != name:
+        country = _lookup_country(first)
+    return country
+
+
+def _lookup_country(name):
+    if not name:
+        return ""
+    if name.lower() not in _countries:
+        country = ""
+        try:
+            r = requests.get(MUSICBRAINZ, timeout=6,
+                             params={"query": f'artist:"{name}"', "fmt": "json", "limit": 3},
+                             headers={"User-Agent": "listening-notes/1.0"})
+            r.raise_for_status()
+            for a in r.json().get("artists", []):
+                if int(a.get("score") or 0) >= 90 and flat(a.get("name")) == flat(name):
+                    country = ((a.get("area") or {}).get("name") or a.get("country") or "")
+                    break
+        except Exception:
+            pass
+        _countries[name.lower()] = country
+    return _countries[name.lower()]
+
+
+def shazam_meta(track, field):
+    """Metadata from the recognition (Album, Label, Released) when the service has nothing."""
+    for section in track.get("sections") or []:
+        for m in section.get("metadata") or []:
+            if (m.get("title") or "").lower() == field.lower():
+                return m.get("text") or ""
+    return ""
+
+
+def track_info(match, track):
+    """Year, genre, label, quality and duration, from the service or else the recognition."""
+    album = (match or {}).get("album") or {}
+    year = (album.get("release_date_original") or "")[:4] or shazam_meta(track, "Released")[:4]
+    genre = ((album.get("genre") or {}).get("name")
+             or ((track.get("genres") or {}).get("primary")) or "")
+    label = ((album.get("label") or {}).get("name") or shazam_meta(track, "Label") or "")
+    bits = (match or {}).get("maximum_bit_depth") or album.get("maximum_bit_depth")
+    rate = (match or {}).get("maximum_sampling_rate") or album.get("maximum_sampling_rate")
+    quality = f"{bits}-bit/{rate:g} kHz" if bits and rate and int(bits) > 16 else ""
+    seconds = int((match or {}).get("duration") or 0)
+    return {"year": int(year) if year.isdigit() else None, "genre": genre, "label": label,
+            "quality": quality, "length": f"{seconds // 60}:{seconds % 60:02d}" if seconds else ""}
+
+
+def info_line(info, with_label=True):
+    parts = [str(info["year"]) if info.get("year") else "", info.get("genre", ""),
+             info.get("country", ""), info.get("label", "") if with_label else "",
+             info.get("quality", ""), info.get("length", "") if with_label else ""]
+    return " · ".join(p for p in parts if p)
+
+
 def legacy_names(name):
     """Possible old names of a playlist, with the word test."""
     n = name.strip().lower()
@@ -354,7 +426,19 @@ class Notion:
                           json={"parent": {"database_id": self.database_id}, "properties": props})
         r.raise_for_status()
 
-    def add_history(self, artist, title, when, status, album, duration, shazam_url):
+    def count_plays(self, artist, title):
+        """How many times this track is already in the history."""
+        query = {"page_size": 100, "filter": {"and": [
+            {"property": "Title", "title": {"equals": (title or "?")[:2000]}},
+            {"property": "Artist", "rich_text": {"equals": (artist or "")[:2000]}},
+        ]}}
+        r = requests.post(f"{NOTION_API}/databases/{self.database_id}/query",
+                          json=query, headers=self.headers, timeout=20)
+        r.raise_for_status()
+        return len(r.json().get("results", []))
+
+    def add_history(self, artist, title, when, status, album, duration, shazam_url, info=None):
+        info = info or {}
         props = {
             "Title": {"title": [{"text": {"content": (title or "?")[:2000]}}]},
             "Artist": text_prop(artist),
@@ -367,6 +451,11 @@ class Notion:
             props["Duration (s)"] = {"number": int(duration)}
         if shazam_url:
             props["Shazam"] = {"url": shazam_url}
+        if info.get("year"):
+            props["Year"] = {"number": info["year"]}
+        for key, prop in (("genre", "Genre"), ("country", "Country"), ("label", "Label")):
+            if info.get(key):
+                props[prop] = text_prop(info[key])
         self.create(props)
 
     def add_missing(self, artist, title, shazam_url, day):
@@ -737,18 +826,36 @@ async def main():
                             log_detail("   Already present everywhere")
                 if key not in seen and not confirming:
                     seen.add(key)
+                    info = track_info(match, track)
+                    info["country"] = artist_country(
+                        (match or {}).get("performer", {}).get("name") or artist)
+                    plays = 0
+                    if history:
+                        try:
+                            plays = history.count_plays(artist, title)
+                        except Exception:
+                            pass
+                    details = info_line(info)
+                    heard = f"\nHeard {plays} time{'s' if plays > 1 else ''} before." if plays else "\nFirst time heard."
+                    short = info_line(info, with_label=False)
+                    suffix = f" ({short})" if short else ""
                     if status == "Added":
-                        recap.append(f"+ {artist} - {title}")
-                        notify(f"{artist} - {title}", f"Added to the playlists. Album: {album_name}",
-                               tags=["musical_note"])
+                        recap.append(f"+ {artist} - {title}{suffix}")
+                        notify(f"{artist} - {title}", f"Added to the playlists. Album: {album_name}"
+                               + (f"\n{details}" if details else "") + heard,
+                               tags=["musical_note"], click=track.get("url"))
                     elif status == "Already present":
-                        recap.append(f"= {artist} - {title}")
+                        recap.append(f"= {artist} - {title}{suffix}")
                         notify(f"{artist} - {title}",
-                               f"Already in the playlists. Album: {album_name}", tags=["repeat"])
+                               f"Already in the playlists. Album: {album_name}"
+                               + (f"\n{details}" if details else "") + heard,
+                               tags=["repeat"], click=track.get("url"))
                     else:
-                        recap.append(f"? {artist} - {title}")
+                        recap.append(f"? {artist} - {title}{suffix}")
                         notify(f"{artist} - {title}", "Not found on the service"
-                               + (", noted in Notion" if notion else ""), tags=["warning"])
+                               + (", noted in Notion" if notion else "")
+                               + (f"\n{details}" if details else "") + heard,
+                               tags=["warning"], click=track.get("url"))
                     if history:
                         try:
                             offset = float(out_first["matches"][0]["offset"])
@@ -757,7 +864,7 @@ async def main():
                         song_start = first["sample_start"] - timedelta(seconds=max(0, offset))
                         try:
                             history.add_history(artist, title, song_start, status, album_name,
-                                                duration, track.get("url"))
+                                                duration, track.get("url"), info)
                             logged += 1
                         except Exception as e:
                             log(f"   Notion history failure ({type(e).__name__})")
