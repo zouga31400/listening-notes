@@ -54,6 +54,51 @@ def log(*args):
     print(*args, flush=True)
 
 
+# Notifications for these playlists use their own ntfy topic (secret NTFY_LISTS_TOPIC:
+# a topic name on ntfy.sh, or a full https://server/topic URL), separate from the
+# radio's NTFY_TOPIC. Not set: no notification.
+_ntfy_failed = False
+
+
+def notify(title, message, tags=(), priority=3, click=None):
+    """Sends a push notification; never stops the run if it fails."""
+    global _ntfy_failed
+    target = os.environ.get("NTFY_LISTS_TOPIC", "").strip()
+    if not target:
+        return
+    if target.startswith("http"):
+        server, _, topic = target.rstrip("/").rpartition("/")
+    else:
+        server, topic = "https://ntfy.sh", target
+    try:
+        r = requests.post(server, timeout=10, json={
+            "topic": topic, "title": title[:250], "message": message[:3000],
+            "tags": list(tags), "priority": priority, **({"click": click} if click else {})})
+        r.raise_for_status()
+    except Exception as e:
+        if not _ntfy_failed:
+            log(f"ntfy notification failed ({type(e).__name__}), continuing without it")
+            _ntfy_failed = True
+
+
+def notify_result(result, link=None):
+    """Notification at the end of a playlist: what was added, removed, not found."""
+    name = result["name"]
+    action = ("created" if result.get("created") else
+              "updated" if result.get("added") or result.get("removed") else "already up to date")
+    lines = [f"{result.get('added', 0)} added, {result.get('already', 0)} already there, "
+             f"{len(result.get('removed', []))} removed, {len(result.get('missing', []))} not found."]
+    if result.get("missing"):
+        lines.append("Not found: " + "; ".join(result["missing"][:10])
+                     + (" ..." if len(result["missing"]) > 10 else ""))
+    tags = ["warning"] if result.get("missing") else ["white_check_mark"]
+    notify(f"Playlist {action}: {name}", "\n".join(lines), tags=tags, click=link)
+
+
+def notify_error(name, error, link=None):
+    notify(f"Playlist error: {name}", str(error), tags=["x"], priority=4, click=link)
+
+
 def norm(text):
     """Normalization for comparisons: accents, case, punctuation, parentheses."""
     text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
@@ -499,10 +544,14 @@ def main(paths):
             failures += 1
             continue
         try:
-            process(service, path)
+            result = process(service, path)
+            if result and result.get("playlist_id"):
+                web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
+                notify_result(result, f"{web}/playlist/{result['playlist_id']}" if web else None)
         except ServiceError as e:
             failures += 1
             log(f"  Error: {e}")
+            notify_error(path, e)
         except Exception as e:  # generic message: no detail that could hold a secret
             failures += 1
             log(f"  Unexpected error ({type(e).__name__}).")

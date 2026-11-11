@@ -239,12 +239,14 @@ def handle(db, service, page):
         lq.log(f"  Error: {e}")
         db.finish(page_id, ERROR, old_report=old_report,
                   blocks=[text_block("paragraph", f"Service error: {e}")])
+        lq.notify_error(name, e, link=page.get("url"))
         return False
 
     web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
     link = f"{web}/playlist/{result['playlist_id']}" if web else None
     db.finish(page_id, DONE, added=result["added"], missing=len(result["missing"]), link=link,
               blocks=report_blocks(name, result, bad, link), old_report=old_report)
+    lq.notify_result(result, link=link or page.get("url"))
     return True
 
 
