@@ -412,6 +412,33 @@ def track_info(match, track):
             "quality": quality, "length": f"{seconds // 60}:{seconds % 60:02d}" if seconds else ""}
 
 
+DEEZER = "https://api.deezer.com"
+
+
+def deezer_tempo(isrc=None, artist="", title=""):
+    """BPM from Deezer's public API (by ISRC, else by search); None when unknown (Deezer
+    returns 0 for many tracks)."""
+    try:
+        data = None
+        if isrc:
+            r = requests.get(f"{DEEZER}/track/isrc:{isrc}", timeout=8)
+            data = r.json() if r.ok else None
+            if data and data.get("error"):
+                data = None
+        if data is None and artist and title:
+            r = requests.get(f"{DEEZER}/search/track", timeout=8,
+                             params={"q": f'artist:"{main_artist(artist)}" track:"{search_title(title)}"',
+                                     "limit": 1})
+            hits = r.json().get("data", []) if r.ok else []
+            if hits:
+                r = requests.get(f"{DEEZER}/track/{hits[0]['id']}", timeout=8)
+                data = r.json() if r.ok else None
+        bpm = float((data or {}).get("bpm") or 0)
+        return round(bpm) if bpm > 0 else None
+    except Exception:
+        return None
+
+
 def decade_label(year):
     """1983 -> "80s", 2004 -> "2000s"."""
     if not year:
@@ -1185,7 +1212,34 @@ def classify_existing():
            f"{categories.created} decade/genre playlists created.", tags=["card_index_dividers"])
 
 
-if __name__ == "__main__" and "--classify" in sys.argv:
+def tempo_report():
+    """Measures how many tracks of the main playlist have a tempo on Deezer, and how the
+    tempos spread. Prints counts only (the log is public)."""
+    check_secrets()
+    config = load_config()
+    service = MusicService()
+    service.login()
+    existing = {p["name"].strip().lower(): p["id"] for p in service.list_playlists()}
+    main_id = existing.get(config["main_playlist"].strip().lower())
+    tracks = service.playlist_tracks(main_id)
+    bpms, by_isrc = [], 0
+    for t in tracks:
+        isrc = (t.get("isrc") or "").strip().upper() or None
+        by_isrc += bool(isrc)
+        bpm = deezer_tempo(isrc, (t.get("performer") or {}).get("name") or "", t.get("title") or "")
+        if bpm:
+            bpms.append(bpm)
+        time.sleep(0.2)
+    log(f"{len(tracks)} tracks, {by_isrc} with an ISRC, {len(bpms)} with a tempo on Deezer")
+    for low, high in ((0, 70), (70, 80), (80, 90), (90, 100), (100, 110), (110, 120),
+                      (120, 130), (130, 140), (140, 160), (160, 999)):
+        n = sum(low <= b < high for b in bpms)
+        log(f"   {low:>3}-{high if high < 999 else '+':>3} BPM: {n:>3} {'#' * n}")
+
+
+if __name__ == "__main__" and "--tempo-report" in sys.argv:
+    tempo_report()
+elif __name__ == "__main__" and "--classify" in sys.argv:
     classify_existing()
 elif __name__ == "__main__":
     try:

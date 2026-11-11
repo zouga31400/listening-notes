@@ -3,6 +3,10 @@ name: Sort existing tracks by decade and genre
 # decade / genre playlists defined in config.txt. New tracks are sorted every evening.
 on:
   workflow_dispatch:
+    inputs:
+      mode:
+        description: "sort = sort the tracks; tempo-report = measure the tempo data only"
+        default: "sort"
 
 concurrency:
   group: radio-listening
@@ -24,4 +28,8 @@ jobs:
       - name: Install requests
         run: pip install -q requests
       - name: Sort the tracks
-        run: python radio_listen.py --classify
+        env:
+          MODE: ${{ github.event.inputs.mode }}
+        run: |
+          if [ "$MODE" = "tempo-report" ]; then python radio_listen.py --tempo-report
+          else python radio_listen.py --classify; fi
