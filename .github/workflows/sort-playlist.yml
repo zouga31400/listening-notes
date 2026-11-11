@@ -1,23 +1,86 @@
 name: Sort a playlist by mood and period
-# Started by hand: copies of a playlist (e.g. Moto) sorted by mood (tempo and energy
-# measured on a 30-second preview) and period, named from sort_playlist_name in config.txt.
+# Copies of playlists sorted by mood (tempo and energy measured on a 30-second preview)
+# and period, named from sort_playlist_name in config.txt.
+# Schedule: set per row in the "Playlists to sort" Notion database (notion_sort_db):
+# Frequency, Day and Hour (Paris time). GitHub checks every hour; the sorting job only
+# runs when a row is due, and the checks that had nothing to do are removed from the
+# history. By hand: the playlists typed in the input, or every ticked row if empty.
 on:
+  schedule:
+    - cron: "7 * * * *"
   workflow_dispatch:
     inputs:
       playlists:
-        description: "Playlists to sort (comma-separated; empty = config.txt)"
+        description: "Playlists to sort (comma-separated; empty = every ticked row of the Notion database)"
         default: ""
 
+concurrency:
+  group: sort-playlist
+  cancel-in-progress: false
+
 jobs:
-  sort:
+  check:
+    name: check
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      due: ${{ steps.count.outputs.due }}
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install requests
+        if: github.event_name == 'schedule'
+        run: pip install -q requests
+      - name: Count the playlists due
+        id: count
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then python sort_playlist.py --due
+          else echo "due=1" >> "$GITHUB_OUTPUT"; fi
+      - name: Delete earlier checks that had nothing to do
+        # Same as the Notion lists workflow: removes the runs of the last 2 hours whose
+        # sorting job was skipped, and runs cancelled while one was queued.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          since=$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)
+          gh api -X GET "repos/$REPO/actions/workflows/sort-playlist.yml/runs" \
+            -f status=completed -f per_page=100 -f created=">$since" --jq '.workflow_runs[] | "\(.id) \(.conclusion)"' | while read -r id conclusion; do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            delete=no
+            if [ "$conclusion" = "cancelled" ]; then
+              delete=yes
+            elif [ "$conclusion" = "success" ]; then
+              skipped=$(gh api "repos/$REPO/actions/runs/$id/jobs" \
+                --jq '[.jobs[] | select(.name == "sort" and .conclusion == "skipped")] | length')
+              [ "$skipped" = "1" ] && delete=yes
+            fi
+            if [ "$delete" = "yes" ]; then
+              gh api -X DELETE "repos/$REPO/actions/runs/$id" >/dev/null && echo "Deleted run $id ($conclusion)"
+            fi
+          done
+
+  sort:
+    name: sort
+    needs: check
+    if: needs.check.outputs.due != '0'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 120
     env:
       MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
       MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
       MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
       MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       PLAYLISTS: ${{ github.event.inputs.playlists }}
+      SCHEDULED: ${{ github.event_name == 'schedule' && '1' || '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
