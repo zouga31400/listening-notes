@@ -35,6 +35,7 @@ STATUS_PROP = "Status"
 TODO, DONE, ERROR = "To create", "Created", "Error"
 ALBUM = "Album"   # status when an existing soundtrack album replaces the playlist
 FILM_PROP = "Film"
+AUTHOR_PROP = "Author"
 REPORT_HEADING = "Sync report"
 # Also recognizes reports written under the previous heading ("<name> report").
 REPORT_HEADING_RE = re.compile(r"\w+ report", re.IGNORECASE)
@@ -167,11 +168,14 @@ class Database:
                 "sorts": [{"timestamp": "created_time", "direction": "ascending"}]}
         return list(self.notion.paginate("POST", f"/databases/{self.id}/query", body))
 
-    def film_of(self, page):
-        prop = (page.get("properties") or {}).get(FILM_PROP) or {}
-        if self.props.get(FILM_PROP) == "rich_text":
+    def text_of(self, page, prop_name):
+        prop = (page.get("properties") or {}).get(prop_name) or {}
+        if self.props.get(prop_name) == "rich_text":
             return plain(prop.get("rich_text")).strip()
         return ""
+
+    def film_of(self, page):
+        return self.text_of(page, FILM_PROP)
 
     def title_of(self, page):
         prop = (page.get("properties") or {}).get(self.title_prop) or {}
@@ -257,8 +261,9 @@ def handle(db, service, page):
     page_id = page["id"]
     name = db.title_of(page) or None
     lines, old_report = page_content(db.notion, page_id)
-    lines, film_line = lq.split_film(lines)
-    film = db.film_of(page) or film_line
+    lines, meta = lq.split_meta(lines)
+    film = db.film_of(page) or meta["film"]
+    author = db.text_of(page, AUTHOR_PROP) or meta["author"]
     name, entries, bad = lq.parse_lines(lines, name=name)
     lq.log(f"=== Notion page: {name or '(no name)'}")
     if not name or not entries:
@@ -267,7 +272,8 @@ def handle(db, service, page):
             "paragraph", "No readable track. Expected format: one \"Artist - Title\" line per track.")])
         return False
     try:
-        result = lq.build_playlist(service, name, entries, bad, "Source: Notion page", film=film)
+        result = lq.build_playlist(service, name, entries, bad, "Source: Notion page", film=film,
+                                   author=author)
     except lq.ServiceError as e:
         lq.log(f"  Error: {e}")
         db.finish(page_id, ERROR, old_report=old_report,

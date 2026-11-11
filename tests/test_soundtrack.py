@@ -39,8 +39,8 @@ class FakeService:
     def find_playlist(self, name):
         return None
 
-    def create_playlist(self, name):
-        self.created = name
+    def create_playlist(self, name, description=None):
+        self.created, self.description = name, description
         return 7
 
     def playlist_tracks(self, playlist_id):
@@ -94,6 +94,50 @@ class SoundtrackAlbum(unittest.TestCase):
                                      "Celine Dion - My Heart Will Go On"])
         self.assertEqual(film, "Titanic (1997)")
         self.assertEqual(lines, ["Titanic songs", "Celine Dion - My Heart Will Go On"])
+
+
+class Description(unittest.TestCase):
+    def test_default_author_comes_from_config(self):
+        self.assertEqual(lq.description_for(), "Created by fsyl20")
+
+    def test_author_named_in_the_request(self):
+        self.assertEqual(lq.description_for("  Marie  "), "Created by Marie")
+
+    def test_new_playlist_gets_the_author(self):
+        service = FakeService([])
+        lq.build_playlist(service, "Rock", ENTRIES, [], "test", author="Marie")
+        self.assertEqual(service.description, "Created by Marie")
+
+    def test_managed_playlists_are_recognized(self):
+        for description in ("Created by fsyl20", "Created by Marie", "Created by lists_sync.py",
+                            "Créée par liste_qobuz.py", "Created by list_qobuz.py"):
+            self.assertTrue(lq.is_managed({"description": description}), description)
+        for description in ("", "My favourite songs", "Created by me for the summer road trip "
+                            "with all the friends from school and their families too"):
+            self.assertFalse(lq.is_managed({"description": description}), description)
+
+    def test_existing_managed_playlist_gets_the_new_description(self):
+        class Existing(FakeService):
+            updated = None
+
+            def find_playlist(self, name):
+                return {"id": 9, "description": "Created by lists_sync.py"}
+
+            def set_description(self, playlist_id, description):
+                self.updated = (playlist_id, description)
+
+            def remove_tracks(self, playlist_id, ids):
+                pass
+
+        service = Existing([])
+        lq.build_playlist(service, "Rock", ENTRIES, [], "test")
+        self.assertEqual(service.updated, (9, "Created by fsyl20"))
+
+    def test_author_line_in_a_file(self):
+        lines, meta = lq.split_meta(["Road trip", "Author: Marie", "Film: Cars (2006)",
+                                     "Sheryl Crow - Real Gone"])
+        self.assertEqual(meta, {"film": "Cars (2006)", "author": "Marie"})
+        self.assertEqual(lines, ["Road trip", "Sheryl Crow - Real Gone"])
 
 
 if __name__ == "__main__":

@@ -146,20 +146,31 @@ def read_list(path):
         return parse_lines(f.read().splitlines())
 
 
-# Optional line naming the film or series a list comes from ("Film: Titanic (1997)").
+# Optional lines right after the playlist name: the film or series the list comes from
+# ("Film: Titanic (1997)") and the author written in the playlist description
+# ("Author: Marie"; the default is playlist_author in config.txt).
 FILM_LINE = re.compile(r"^\s*(?:film|movie|series|s[ée]rie)\s*:\s*(.+?)\s*$", re.IGNORECASE)
+AUTHOR_LINE = re.compile(r"^\s*(?:author|auteur|by|par)\s*:\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def split_meta(lines):
+    """(lines without the "Film:" / "Author:" lines, {"film": ..., "author": ...})."""
+    meta, kept = {"film": None, "author": None}, []
+    for line in lines:
+        for key, pattern in (("film", FILM_LINE), ("author", AUTHOR_LINE)):
+            m = pattern.match(line)
+            if m and meta[key] is None:
+                meta[key] = m.group(1)
+                break
+        else:
+            kept.append(line)
+    return kept, meta
 
 
 def split_film(lines):
     """(lines without the "Film: ..." line, film name or None)."""
-    film, kept = None, []
-    for line in lines:
-        m = FILM_LINE.match(line)
-        if m and film is None:
-            film = m.group(1)
-        else:
-            kept.append(line)
-    return kept, film
+    kept, meta = split_meta(lines)
+    return kept, meta["film"]
 
 
 def parse_lines(lines, name=None):
@@ -263,13 +274,16 @@ class MusicService:
                 return p
         return None
 
-    def create_playlist(self, name):
+    def create_playlist(self, name, description=None):
         data = self.call("POST", "/playlist/create", name=name,
-                         description="Created by lists_sync.py",
+                         description=description or description_for(),
                          is_public="0", is_collaborative="0")
         if "id" not in data:
             raise ServiceError("Playlist creation: unexpected response")
         return data["id"]
+
+    def set_description(self, playlist_id, description):
+        self.call("POST", "/playlist/update", playlist_id=playlist_id, description=description)
 
     def playlist_tracks(self, playlist_id):
         """Entries of the playlist, in order (each has 'id' and 'playlist_track_id')."""
@@ -306,14 +320,42 @@ class MusicService:
         return added
 
 
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt")
+DEFAULT_AUTHOR = "fsyl20"
+
+
+def config_value(key):
+    """One 'key = value' line of config.txt (lines starting with # are ignored)."""
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip().lower() == key:
+                        return v.strip()
+    except FileNotFoundError:
+        pass
+    return ""
+
+
+def description_for(author=None):
+    """Playlist description: "Created by <author>" (request's author, else config.txt)."""
+    author = " ".join((author or "").split())[:60] or config_value("playlist_author") or DEFAULT_AUTHOR
+    return f"Created by {author}"
+
+
 # Playlists created by this tool (current or older French description). Only these are
 # kept in sync with their list: tracks that are no longer chosen get removed.
 # "Created by lists_sync.py" (older playlists carry the previous script name, list_<name>.py).
 MANAGED_RE = re.compile(r"\b(?:lists_sync|list(?:e|es|s)?_\w+)\.py\b", re.IGNORECASE)
+# Current description: exactly "Created by <author>" on one short line.
+MANAGED_AUTHOR_RE = re.compile(r"^\s*Created by [^\n]{1,60}$")
 
 
 def is_managed(playlist):
-    return bool(MANAGED_RE.search((playlist or {}).get("description") or ""))
+    description = (playlist or {}).get("description") or ""
+    return bool(MANAGED_RE.search(description) or MANAGED_AUTHOR_RE.match(description))
 
 
 def label(track):
@@ -484,15 +526,16 @@ def summary(text):
 def process(service, path):
     log(f"=== File: {path}")
     with open(path, encoding="utf-8-sig", errors="replace") as f:
-        lines, film = split_film(f.read().splitlines())
+        lines, meta = split_meta(f.read().splitlines())
     name, entries, bad = parse_lines(lines)
     if not name:
         log("  Empty file: skipped.")
         return None
-    return build_playlist(service, name, entries, bad, f"File: `{path}`", film=film)
+    return build_playlist(service, name, entries, bad, f"File: `{path}`",
+                          film=meta["film"], author=meta["author"])
 
 
-def build_playlist(service, name, entries, bad, source, film=None):
+def build_playlist(service, name, entries, bad, source, film=None, author=None):
     """Creates, completes or syncs the playlist; returns the report as a dictionary.
 
     For a playlist created by this tool, the list is the reference: tracks that are
@@ -527,6 +570,7 @@ def build_playlist(service, name, entries, bad, source, film=None):
         if soundtrack and not album_worth_mentioning(soundtrack):
             soundtrack = None
 
+    description = description_for(author)
     existing = service.find_playlist(name)
     managed = existing is None or is_managed(existing)
     if existing:
@@ -534,8 +578,14 @@ def build_playlist(service, name, entries, bad, source, film=None):
         current = service.playlist_tracks(playlist_id)
         mode = "syncing it with the list" if managed else "completing it (not created by this tool)"
         log(f"  Existing playlist: {mode} ({len(current)} tracks in it).")
+        if managed and (existing.get("description") or "").strip() != description:
+            try:
+                service.set_description(playlist_id, description)
+                log(f"  Description set to \"{description}\".")
+            except ServiceError as e:
+                log(f"  Description not updated: {e}")
     else:
-        playlist_id = service.create_playlist(name)
+        playlist_id = service.create_playlist(name, description)
         current = []
         log("  Playlist created (private).")
     present = {t["id"] for t in current}
