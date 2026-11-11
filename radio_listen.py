@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import requests
-from shazamio import Shazam
 
 # The music service is configured through secrets so that the repository never names it:
 # MUSIC_API_URL (API base URL) and MUSIC_APP_ID (application ID).
@@ -225,6 +224,17 @@ class MusicService:
                 return ids
             offset += 500
 
+    def playlist_tracks(self, playlist_id):
+        tracks, offset = [], 0
+        while True:
+            data = self.call("GET", "/playlist/get", playlist_id=playlist_id,
+                             extra="tracks", limit=500, offset=offset)
+            items = data.get("tracks", {}).get("items", [])
+            tracks.extend(items)
+            if len(items) < 500:
+                return tracks
+            offset += 500
+
     def search(self, query):
         data = self.call("GET", "/catalog/search", query=query, limit=30)
         return data.get("tracks", {}).get("items", [])
@@ -313,7 +323,13 @@ def pick(tracks, artist, title, isrc=None):
     if not candidates:
         return None
     candidates.sort(key=lambda c: (-c[0], c[1]))
-    return candidates[0][2]
+    best = dict(candidates[0][2])
+    # Original year: the oldest release among the relevant versions (a remaster's album
+    # often carries the reissue date).
+    years = [int(c[1][:4]) for c in candidates if c[1][:4].isdigit() and c[1] != "9999"]
+    if years:
+        best["_original_year"] = min(years)
+    return best
 
 
 def find_match(service, artist, title, key, isrc=None):
@@ -382,7 +398,9 @@ def shazam_meta(track, field):
 def track_info(match, track):
     """Year, genre, label, quality and duration, from the service or else the recognition."""
     album = (match or {}).get("album") or {}
-    year = (album.get("release_date_original") or "")[:4] or shazam_meta(track, "Released")[:4]
+    year = (str((match or {}).get("_original_year") or "")
+            or (album.get("release_date_original") or "")[:4]
+            or shazam_meta(track, "Released")[:4])
     genre = ((album.get("genre") or {}).get("name")
              or ((track.get("genres") or {}).get("primary")) or "")
     label = ((album.get("label") or {}).get("name") or shazam_meta(track, "Label") or "")
@@ -392,6 +410,59 @@ def track_info(match, track):
     seconds = int((match or {}).get("duration") or 0)
     return {"year": int(year) if year.isdigit() else None, "genre": genre, "label": label,
             "quality": quality, "length": f"{seconds // 60}:{seconds % 60:02d}" if seconds else ""}
+
+
+def decade_label(year):
+    """1983 -> "80s", 2004 -> "2000s"."""
+    if not year:
+        return ""
+    decade = year // 10 * 10
+    return f"{decade % 100:02d}s" if decade < 2000 else f"{decade}s"
+
+
+def category_playlists(config, info):
+    """Names of the decade / genre playlists for a track, from the patterns in config.txt."""
+    decade = decade_label(info.get("year"))
+    genre = (info.get("genre") or "").strip()
+    names = []
+    for key, needs in (("decade_playlist", ("{decade}",)), ("genre_playlist", ("{genre}",)),
+                       ("genre_decade_playlist", ("{genre}", "{decade}"))):
+        pattern = (config.get(key) or "").strip()
+        if not pattern:
+            continue
+        if ("{decade}" in needs and not decade) or ("{genre}" in needs and not genre):
+            continue
+        names.append(" ".join(pattern.replace("{decade}", decade).replace("{genre}", genre).split()))
+    return names
+
+
+class Categories:
+    """Decade / genre playlists, created on first use."""
+
+    def __init__(self, service, existing):
+        self.service = service
+        self.existing = existing      # lower-case name -> id
+        self.present = {}             # id -> set of track ids
+        self.added = 0
+        self.created = 0
+
+    def add(self, name, track_id):
+        playlist_id = self.existing.get(name.lower())
+        if playlist_id is None:
+            playlist_id = self.service.create_playlist(
+                name, "Tracks recognized automatically, sorted by decade and genre")
+            self.existing[name.lower()] = playlist_id
+            self.present[playlist_id] = set()
+            self.created += 1
+        if playlist_id not in self.present:
+            self.present[playlist_id] = self.service.playlist_track_ids(playlist_id)
+        if track_id in self.present[playlist_id]:
+            return False
+        self.service.call("POST", "/playlist/addTracks", playlist_id=playlist_id,
+                          track_ids=str(track_id), no_duplicate="true")
+        self.present[playlist_id].add(track_id)
+        self.added += 1
+        return True
 
 
 def info_line(info, with_label=True):
@@ -759,6 +830,7 @@ async def main():
 
     for t in targets:
         log(f"Playlist '{t['name']}' ({t['label']}): {len(t['present'])} tracks already present")
+    categories = Categories(service, existing)
     if NTFY_TOPIC:
         log("ntfy notifications on")
     notify("Radio listening: listening started",
@@ -776,6 +848,7 @@ async def main():
     log(f"Show end detection from {detect_from:%H:%M}: {detector.streak} tracks in a row, "
         f"listening at most until {end:%H:%M}")
 
+    from shazamio import Shazam
     shazam = Shazam()
     seen = set()
     durations = {}
@@ -821,6 +894,12 @@ async def main():
                        f" [album: {album_name}] (id {match['id']})")
         info = track_info(match, track)
         info["country"] = artist_country((match or {}).get("performer", {}).get("name") or artist)
+        if match is not None:
+            for name in category_playlists(config, info):
+                try:
+                    categories.add(name, match["id"])
+                except Exception as e:
+                    log(f"   Could not add to a decade/genre playlist ({type(e).__name__})")
         plays = 0
         if history:
             try:
@@ -1014,6 +1093,8 @@ async def main():
         log(f"   Notion: {logged} plays added to the history")
     for t in targets:
         log(f"   {t['name']}: {t['added']} tracks added")
+    if categories.added or categories.created:
+        log(f"   Decade/genre playlists: {categories.added} additions, {categories.created} created")
     summary = (f"{recognized} recognitions, "
                + ", ".join(f"{t['added']} added to {t['name']}" for t in targets))
     if notion:
@@ -1062,7 +1143,51 @@ def cleanup_daily(service, config, start):
         log(f"{deleted} daily playlist(s) older than {keep} days deleted")
 
 
-if __name__ == "__main__":
+def classify_existing():
+    """Sorts the tracks already in the main playlist into the decade / genre playlists."""
+    check_secrets()
+    config = load_config()
+    service = MusicService()
+    service.login()
+    log("Service login OK")
+    existing = {p["name"].strip().lower(): p["id"] for p in service.list_playlists()}
+    main_id = existing.get(config["main_playlist"].strip().lower())
+    if main_id is None:
+        raise SystemExit("Main playlist not found")
+    categories = Categories(service, existing)
+    tracks = service.playlist_tracks(main_id)
+    log(f"{len(tracks)} tracks to sort")
+    skipped = 0
+    for t in tracks:
+        artist = (t.get("performer") or {}).get("name") or ""
+        title = t.get("title") or ""
+        try:
+            # Look for the oldest version to get the original year.
+            versions = service.search(f"{artist} {search_title(title)}")
+            best = pick(versions + [t], norm(artist), norm(title))
+        except Exception:
+            best = None
+        base = t if ((t.get("album") or {}).get("genre")) else (best or t)
+        info = track_info(dict(base, _original_year=(best or {}).get("_original_year")), {})
+        names = category_playlists(config, info)
+        if not names:
+            skipped += 1
+        for name in names:
+            try:
+                categories.add(name, t["id"])
+            except Exception as e:
+                log(f"Could not add to a decade/genre playlist ({type(e).__name__})")
+        time.sleep(0.3)
+    log(f"Done: {categories.added} additions, {categories.created} playlists created, "
+        f"{skipped} tracks without year or genre")
+    notify("Radio listening: tracks sorted",
+           f"{len(tracks)} tracks sorted: {categories.added} additions, "
+           f"{categories.created} decade/genre playlists created.", tags=["card_index_dividers"])
+
+
+if __name__ == "__main__" and "--classify" in sys.argv:
+    classify_existing()
+elif __name__ == "__main__":
     try:
         asyncio.run(main())
     except SystemExit as e:
