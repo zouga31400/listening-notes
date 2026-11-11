@@ -1,0 +1,27 @@
+name: Sort existing tracks by decade and genre
+# Started by hand: sorts the tracks already in the main playlist into the
+# decade / genre playlists defined in config.txt. New tracks are sorted every evening.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: radio-listening
+  cancel-in-progress: false
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
+      MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
+      MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
+      MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
+      STREAM_URL: ${{ secrets.STREAM_URL }}
+      NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install requests
+        run: pip install -q requests
+      - name: Sort the tracks
+        run: python radio_listen.py --classify

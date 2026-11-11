@@ -15,6 +15,14 @@ previous_main_playlist = Github
 daily_playlist = Radio {date}
 monthly_playlist = Radio {month}
 
+# Playlists by decade and genre, created automatically on first use.
+# {decade} becomes 60s, 70s, 80s, 90s, 2000s...; {genre} is the album's genre on the
+# service (the original year is used, not the date of a remaster).
+# Leave a value empty to turn that kind of playlist off.
+decade_playlist = Radio {decade}
+genre_playlist =
+genre_decade_playlist = Radio {genre} {decade}
+
 # Notion database for tracks recognized but missing from the service.
 # Database ID (not secret). The token goes in the NOTION_TOKEN GitHub secret.
 notion_missing_db = 0cfa728c14294956be448e18eb460be1

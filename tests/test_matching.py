@@ -112,6 +112,32 @@ class TrackInfo(unittest.TestCase):
         self.assertEqual(r.info_line(r.track_info(None, shazam)), "1983 · Pop · Hungaroton")
 
 
+class DecadeGenre(unittest.TestCase):
+    CONFIG = {"decade_playlist": "Radio {decade}", "genre_playlist": "",
+              "genre_decade_playlist": "Radio {genre} {decade}"}
+
+    def test_decade_label(self):
+        self.assertEqual([r.decade_label(y) for y in (1965, 1983, 1999, 2004, 2019, None)],
+                         ["60s", "80s", "90s", "2000s", "2010s", ""])
+
+    def test_category_names(self):
+        self.assertEqual(r.category_playlists(self.CONFIG, {"year": 1983, "genre": "Rock"}),
+                         ["Radio 80s", "Radio Rock 80s"])
+        self.assertEqual(r.category_playlists(self.CONFIG, {"year": 1983, "genre": ""}),
+                         ["Radio 80s"])
+        self.assertEqual(r.category_playlists(self.CONFIG, {"year": None, "genre": "Rock"}), [])
+
+    def test_original_year_ignores_remaster_date(self):
+        tracks = [track("Public Image Ltd.", "This Is Not A Love Song",
+                        "This Is What You Want (2011 Remaster)", "2011-01-01"),
+                  track("Public Image Ltd.", "This Is Not A Love Song",
+                        "This Is What You Want", "1984-07-09")]
+        best = r.pick(tracks, r.norm("Public Image Ltd."), r.norm("This Is Not A Love Song"))
+        self.assertEqual(best["album"]["title"], "This Is What You Want (2011 Remaster)")
+        self.assertEqual(best["_original_year"], 1984)
+        self.assertEqual(r.track_info(best, {})["year"], 1984)
+
+
 class ShowEnd(unittest.TestCase):
     def test_run_of_three_ends_the_show_and_keeps_the_first(self):
         d = r.EndDetector(3)
