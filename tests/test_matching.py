@@ -112,6 +112,41 @@ class TrackInfo(unittest.TestCase):
         self.assertEqual(r.info_line(r.track_info(None, shazam)), "1983 · Pop · Hungaroton")
 
 
+class ShowEnd(unittest.TestCase):
+    def test_run_of_three_ends_the_show_and_keeps_the_first(self):
+        d = r.EndDetector(3)
+        self.assertEqual(d.on_track("A", True), ["A"])   # after speech: first of the run
+        self.assertEqual(d.on_track("B", True), [])      # back to back: held
+        self.assertEqual(d.on_track("C", True), [])      # third in a row: end
+        self.assertTrue(d.ended)
+        self.assertEqual(d.dropped, ["B", "C"])
+
+    def test_speech_releases_held_tracks(self):
+        d = r.EndDetector(3)
+        d.on_track("A", True)
+        self.assertEqual(d.on_track("B", True), [])
+        self.assertEqual(d.on_speech(), ["B"])           # host speaks again: B was in the show
+        self.assertEqual(d.on_track("C", True), ["C"])
+        self.assertFalse(d.ended)
+
+    def test_inactive_before_midnight(self):
+        d = r.EndDetector(3)
+        self.assertEqual([d.on_track(x, False) for x in "ABCD"], [["A"], ["B"], ["C"], ["D"]])
+        self.assertFalse(d.ended)
+
+    def test_run_started_before_midnight_counts(self):
+        d = r.EndDetector(3)
+        d.on_track("A", False)                            # 23:58, kept
+        self.assertEqual(d.on_track("B", True), [])       # 00:02, held
+        d.on_track("C", True)                             # 00:06, end
+        self.assertTrue(d.ended)
+
+    def test_held_tracks_kept_at_time_limit(self):
+        d = r.EndDetector(4)
+        d.on_track("A", True); d.on_track("B", True)
+        self.assertEqual(d.finish(), ["B"])
+
+
 class Housekeeping(unittest.TestCase):
     def test_only_old_daily_playlists_are_deleted(self):
         playlists = [{"name": "Radio 2026-09-01", "id": 1}, {"name": "Radio 2026-10-11", "id": 2},
