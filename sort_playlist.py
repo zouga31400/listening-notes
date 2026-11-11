@@ -14,6 +14,13 @@ the "Playlists to sort" Notion database (notion_sort_db in config.txt, NOTION_TO
 secret), whose "Last sorted", "Copies" and "Result" are then filled in; config.txt's
 sort_playlists is only used when no Notion database is set.
 
+Schedule, per Notion row: "Frequency" (Daily / Weekly / Monthly), "Day" (weekly: that
+day; monthly: the first such day of the month) and "Hour" (Paris time); empty means
+every Friday at 19:00. The workflow checks every hour (--due mode, without the audio
+tools); a scheduled run sorts only the rows whose last scheduled time came after their
+"Last sorted", so a missed time is caught up at the next check. A run by hand with an
+empty input sorts every ticked row.
+
 Copies created by this script (description "Created by sort_playlist.py") are kept in
 sync with the original: each run adds what is missing and removes tracks that left the
 original or changed category. A playlist with the same name not created by the script
@@ -22,7 +29,7 @@ is only completed, never trimmed.
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from analyze_playlists import MusicService, flat, load_config, log
@@ -31,6 +38,8 @@ from radio_listen import (decade_label, log_detail, mood_of, norm, period_label,
 
 MARKER = "Created by sort_playlist.py"
 PARIS = ZoneInfo("Europe/Paris")
+DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+DEFAULT_DAY, DEFAULT_HOUR = 4, 19   # Friday, 19:00
 BATCH = 50
 
 
@@ -158,9 +167,54 @@ def sort_one(service, source, playlists, config, pattern):
     return {name: len(dict.fromkeys(ids)) for name, ids in groups.items()}, unsorted
 
 
-def notion_rows(config):
-    """Ticked rows of the "Playlists to sort" Notion database: [(page id, playlist name)].
-    None when no database is set in config.txt."""
+def last_slot(frequency, day, hour, now):
+    """Latest scheduled time at or before now (Paris time)."""
+    frequency = (frequency or "weekly").strip().lower()
+    for back in range(0, 40):
+        d = (now - timedelta(days=back)).replace(hour=hour, minute=0, second=0, microsecond=0)
+        if d > now:
+            continue
+        if frequency == "daily":
+            return d
+        if d.weekday() != day:
+            continue
+        if frequency == "monthly" and d.day > 7:
+            continue
+        return d
+    return None
+
+
+def parse_when(value):
+    if not value:
+        return None
+    try:
+        when = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when.replace(tzinfo=PARIS) if when.tzinfo is None else when
+
+
+def row_schedule(props):
+    """(frequency, weekday 0-6, hour) of a Notion row, with the defaults."""
+    def select(name):
+        return ((props.get(name) or {}).get("select") or {}).get("name") or ""
+    day = select("Day").strip().lower()
+    day = DAYS.index(day) if day in DAYS else DEFAULT_DAY
+    hour = (props.get("Hour") or {}).get("number")
+    hour = int(hour) if isinstance(hour, (int, float)) and 0 <= hour <= 23 else DEFAULT_HOUR
+    return select("Frequency") or "Weekly", day, hour
+
+
+def is_due(props, now):
+    frequency, day, hour = row_schedule(props)
+    slot = last_slot(frequency, day, hour, now)
+    last = parse_when(((props.get("Last sorted") or {}).get("date") or {}).get("start"))
+    return slot is not None and (last is None or last < slot)
+
+
+def notion_rows(config, only_due=False):
+    """Ticked rows of the "Playlists to sort" Notion database: (notion, [(page id, name)]),
+    only those whose scheduled time has come when only_due. None when no database is set."""
     raw = (config.get("notion_sort_db") or "").strip()
     if not raw:
         return None
@@ -170,14 +224,31 @@ def notion_rows(config):
         raise SystemExit("NOTION_TOKEN secret missing (needed to read notion_sort_db)")
     notion = Notion(token)
     body = {"filter": {"property": "Active", "checkbox": {"equals": True}}}
+    now = datetime.now(PARIS)
     rows = []
     for page in notion.paginate("POST", f"/databases/{database_id(raw)}/query", body):
-        title = next((v.get("title") for v in page.get("properties", {}).values()
-                      if v.get("type") == "title"), [])
+        props = page.get("properties", {})
+        title = next((v.get("title") for v in props.values() if v.get("type") == "title"), [])
         name = plain(title).strip()
-        if name:
+        if name and (not only_due or is_due(props, now)):
             rows.append((page["id"], name))
     return notion, rows
+
+
+def count_due():
+    """--due mode: writes due=<n> to GITHUB_OUTPUT (1 on a Notion error, so the sorting
+    job runs and reports it). Doesn't touch the music service."""
+    try:
+        found = notion_rows(load_config(), only_due=True)
+        count = 0 if found is None else len(found[1])
+        log(f"{count} playlist(s) due for sorting")
+    except Exception as e:
+        count = 1
+        log(f"Notion check failed ({type(e).__name__}: {str(e)[:150]}); the sorting job will report it")
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a", encoding="utf-8") as f:
+            f.write(f"due={count}\n")
 
 
 def notion_report(notion, page_id, copies=None, unsorted=0, error=None):
@@ -208,14 +279,16 @@ def main():
         rows = [(None, n.strip()) for n in wanted.split(",") if n.strip()]
         log(f"{len(rows)} playlists from the workflow input")
     else:
-        found = notion_rows(config)
+        scheduled = os.environ.get("SCHEDULED", "").strip() == "1"
+        found = notion_rows(config, only_due=scheduled)
         if found is None:
             rows = [(None, n.strip()) for n in config.get("sort_playlists", "").split(",")
                     if n.strip()]
             log(f"{len(rows)} playlists from config.txt")
         else:
             notion, rows = found
-            log(f"{len(rows)} playlists ticked in the Notion database")
+            log(f"{len(rows)} playlists " + ("due" if scheduled else "ticked")
+                + " in the Notion database")
     if not rows:
         log("No playlist to sort")
         return
@@ -244,7 +317,9 @@ def main():
             notion_report(notion, page_id, copies, unsorted)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--due" in sys.argv:
+    count_due()
+elif __name__ == "__main__":
     try:
         main()
     except RuntimeError as e:
