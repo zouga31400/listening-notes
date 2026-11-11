@@ -20,6 +20,7 @@ jobs:
       MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
       MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
       MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
+      MUSIC_WEB_URL: ${{ secrets.MUSIC_WEB_URL }}
       STREAM_URL: ${{ secrets.STREAM_URL }}
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}

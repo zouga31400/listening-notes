@@ -6,6 +6,7 @@ import sys
 import time
 import unicodedata
 from datetime import datetime, timedelta
+from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo
 
 import requests
@@ -599,6 +600,33 @@ def legacy_names(name):
             n + " - test", n + "_test", n + " (test)"]
 
 
+def cover_url(match, track):
+    """Album art for the Notion page: from the service, else from the recognition."""
+    image = ((match or {}).get("album") or {}).get("image") or {}
+    url = image.get("large") or image.get("small") or image.get("thumbnail")
+    if not url:
+        images = (track or {}).get("images") or {}
+        url = images.get("coverarthq") or images.get("coverart")
+    return url or ""
+
+
+def track_link(match):
+    """Web link of the track on the service (MUSIC_WEB_URL secret), or ""."""
+    web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
+    return f"{web}/track/{match['id']}" if web and match and match.get("id") else ""
+
+
+def youtube_link(artist, title):
+    return "https://www.youtube.com/results?search_query=" + quote_plus(f"{artist} {title}")
+
+
+# Properties added to the Notion databases when missing (the integration needs the
+# right to edit the database; otherwise these values are simply left out).
+HISTORY_PROPERTIES = {"Decade": {"select": {}}, "Link": {"url": {}}, "YouTube": {"url": {}}}
+MISSING_PROPERTIES = {"YouTube": {"url": {}}, "Album": {"rich_text": {}},
+                      "Year": {"number": {}}, "Decade": {"select": {}}, "Genre": {"rich_text": {}}}
+
+
 def text_prop(value):
     return {"rich_text": [{"text": {"content": (value or "")[:2000]}}]}
 
@@ -611,14 +639,31 @@ class Notion:
         self.headers = {"Authorization": f"Bearer {token}", "Notion-Version": "2022-06-28",
                         "Content-Type": "application/json"}
 
-    def check(self):
+    def check(self, wanted=None):
+        """Checks access, and adds the 'wanted' properties the database does not have."""
         r = requests.get(f"{NOTION_API}/databases/{self.database_id}",
                          headers=self.headers, timeout=20)
         r.raise_for_status()
+        self.properties = set((r.json().get("properties") or {}).keys())
+        missing = {k: v for k, v in (wanted or {}).items() if k not in self.properties}
+        if missing:
+            r = requests.patch(f"{NOTION_API}/databases/{self.database_id}", headers=self.headers,
+                               json={"properties": missing}, timeout=20)
+            if r.ok:
+                self.properties |= set(missing)
+                log(f"   Notion: properties added ({', '.join(missing)})")
+            else:
+                log(f"   Notion: could not add properties (HTTP {r.status_code}), left out")
 
-    def create(self, props):
-        r = requests.post(f"{NOTION_API}/pages", headers=self.headers, timeout=20,
-                          json={"parent": {"database_id": self.database_id}, "properties": props})
+    def create(self, props, cover=""):
+        known = getattr(self, "properties", None)
+        if known:  # never send a property the database does not have (Notion rejects it)
+            props = {k: v for k, v in props.items() if k in known}
+        body = {"parent": {"database_id": self.database_id}, "properties": props}
+        if cover:
+            body["cover"] = {"type": "external", "external": {"url": cover}}
+            body["icon"] = {"type": "external", "external": {"url": cover}}
+        r = requests.post(f"{NOTION_API}/pages", headers=self.headers, timeout=20, json=body)
         r.raise_for_status()
 
     def count_plays(self, artist, title):
@@ -632,7 +677,8 @@ class Notion:
         r.raise_for_status()
         return len(r.json().get("results", []))
 
-    def add_history(self, artist, title, when, status, album, duration, shazam_url, info=None):
+    def add_history(self, artist, title, when, status, album, duration, shazam_url, info=None,
+                    cover="", link=""):
         info = info or {}
         props = {
             "Title": {"title": [{"text": {"content": (title or "?")[:2000]}}]},
@@ -648,6 +694,10 @@ class Notion:
             props["Shazam"] = {"url": shazam_url}
         if info.get("year"):
             props["Year"] = {"number": info["year"]}
+            props["Decade"] = {"select": {"name": decade_label(info["year"])}}
+        if link:
+            props["Link"] = {"url": link}
+        props["YouTube"] = {"url": youtube_link(artist, title)}
         for key, prop in (("bpm", "BPM"), ("energy", "Energy")):
             if info.get(key) is not None:
                 props[prop] = {"number": info[key]}
@@ -656,9 +706,9 @@ class Notion:
         for key, prop in (("genre", "Genre"), ("country", "Country"), ("label", "Label")):
             if info.get(key):
                 props[prop] = text_prop(info[key])
-        self.create(props)
+        self.create(props, cover)
 
-    def add_missing(self, artist, title, shazam_url, day):
+    def add_missing(self, artist, title, shazam_url, day, info=None, album="", cover=""):
         query = {"page_size": 1, "filter": {"and": [
             {"property": "Title", "title": {"equals": title[:2000]}},
             {"property": "Artist", "rich_text": {"equals": artist[:2000]}},
@@ -675,7 +725,16 @@ class Notion:
         }
         if shazam_url:
             props["Shazam"] = {"url": shazam_url}
-        self.create(props)
+        props["YouTube"] = {"url": youtube_link(artist, title)}
+        info = info or {}
+        if album:
+            props["Album"] = text_prop(album)
+        if info.get("year"):
+            props["Year"] = {"number": info["year"]}
+            props["Decade"] = {"select": {"name": decade_label(info["year"])}}
+        if info.get("genre"):
+            props["Genre"] = text_prop(info["genre"])
+        self.create(props, cover)
         return True
 
 
@@ -897,13 +956,13 @@ async def main():
     if STREAM_URL_BACKUP:
         log("Backup stream configured")
 
-    def open_notion(key, label):
+    def open_notion(key, label, wanted=None):
         if not (NOTION_TOKEN and config.get(key)):
             log(f"Notion {label}: not configured (NOTION_TOKEN secret or {key} missing)")
             return None
         db = Notion(NOTION_TOKEN, config[key])
         try:
-            db.check()
+            db.check(wanted)
             log(f"Notion {label}: database reachable")
             return db
         except Exception as e:
@@ -917,8 +976,8 @@ async def main():
             log(f"Notion {label}: unreachable ({why})")
             return None
 
-    notion = open_notion("notion_missing_db", "missing tracks")
-    history = open_notion("notion_history_db", "history")
+    notion = open_notion("notion_missing_db", "missing tracks", MISSING_PROPERTIES)
+    history = open_notion("notion_history_db", "history", HISTORY_PROPERTIES)
 
     main_name = config["main_playlist"]
     existing = {p["name"].strip().lower(): p["id"] for p in service.list_playlists()}
@@ -993,7 +1052,9 @@ async def main():
             log_detail(f"   No match on the service: {artist} - {title}")
             if notion:
                 try:
-                    if notion.add_missing(artist, title, track.get("url"), start):
+                    if notion.add_missing(artist, title, track.get("url"), start,
+                                          track_info(None, track), shazam_meta(track, "Album"),
+                                          cover_url(None, track)):
                         noted += 1
                 except Exception as e:
                     log(f"   Notion failure ({type(e).__name__})")
@@ -1067,7 +1128,8 @@ async def main():
             song_start = item["sample_start"] - timedelta(seconds=max(0, offset))
             try:
                 history.add_history(artist, title, song_start, status, album_name,
-                                    duration, track.get("url"), info)
+                                    duration, track.get("url"), info,
+                                    cover_url(match, track), track_link(match))
                 logged += 1
             except Exception as e:
                 log(f"   Notion history failure ({type(e).__name__})")
