@@ -68,6 +68,7 @@ jobs:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
       NTFY_LISTS_TOPIC: ${{ secrets.NTFY_LISTS_TOPIC }}
+      PLAYLIST_AUTHOR: ${{ secrets.PLAYLIST_AUTHOR }}
       MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
       MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
       MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}

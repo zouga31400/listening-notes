@@ -97,8 +97,18 @@ class SoundtrackAlbum(unittest.TestCase):
 
 
 class Description(unittest.TestCase):
-    def test_default_author_comes_from_config(self):
-        self.assertEqual(lq.description_for(), "Created by fsyl20")
+    def setUp(self):
+        os.environ["PLAYLIST_AUTHOR"] = "Default Author"
+
+    def tearDown(self):
+        os.environ.pop("PLAYLIST_AUTHOR", None)
+
+    def test_default_author_comes_from_the_secret(self):
+        self.assertEqual(lq.description_for(), "Created by Default Author")
+
+    def test_no_author_at_all(self):
+        os.environ.pop("PLAYLIST_AUTHOR")
+        self.assertEqual(lq.description_for(), "Created from a list")
 
     def test_author_named_in_the_request(self):
         self.assertEqual(lq.description_for("  Marie  "), "Created by Marie")
@@ -109,7 +119,7 @@ class Description(unittest.TestCase):
         self.assertEqual(service.description, "Created by Marie")
 
     def test_managed_playlists_are_recognized(self):
-        for description in ("Created by fsyl20", "Created by Marie", "Created by lists_sync.py",
+        for description in ("Created by Default Author", "Created by Marie", "Created from a list", "Created by lists_sync.py",
                             "Créée par liste_qobuz.py", "Created by list_qobuz.py"):
             self.assertTrue(lq.is_managed({"description": description}), description)
         for description in ("", "My favourite songs", "Created by me for the summer road trip "
@@ -131,7 +141,7 @@ class Description(unittest.TestCase):
 
         service = Existing([])
         lq.build_playlist(service, "Rock", ENTRIES, [], "test")
-        self.assertEqual(service.updated, (9, "Created by fsyl20"))
+        self.assertEqual(service.updated, (9, "Created by Default Author"))
 
     def test_author_line_in_a_file(self):
         lines, meta = lq.split_meta(["Road trip", "Author: Marie", "Film: Cars (2006)",
