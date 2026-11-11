@@ -33,6 +33,15 @@ listen_start = 21:00
 listen_interval = 45
 speech_interval = 90
 
+# Number of matching recognitions before a track is added (1 = at the first one).
+# 2 avoids false matches when the host talks over the music; a track about to end
+# is added at once.
+confirmations = 2
+
+# Daily playlists older than this many days are deleted at the end of the evening
+# (monthly playlists are kept). 0 = never delete.
+keep_daily_days = 30
+
 # Playlist analysis ("Track suggestions" workflow, started by hand).
 # analyze_playlists: names of your playlists to analyze, comma-separated,
 #   or * for all your playlists except the radio and suggestion ones.
