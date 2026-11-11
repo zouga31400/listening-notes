@@ -91,9 +91,12 @@ notion_lists_db = ea8e66660faa4ce299e2f599916f1058
 playlist_author = fsyl20
 
 # Copies of a playlist sorted by mood and period ("Sort a playlist by mood and period"
-# workflow, started by hand). Moods use the thresholds above (calm_max_energy...).
-# sort_playlists: playlists to sort, comma-separated.
+# workflow, every Friday evening or by hand). Moods use the thresholds above (calm_max_energy...).
+# notion_sort_db: "Playlists to sort" Notion database (one row per playlist, ticked
+#   "Active" ones are sorted every Friday evening; Last sorted / Copies / Result filled in).
+# sort_playlists: only used when notion_sort_db is empty.
 # sort_playlist_name: name of each copy; {playlist}, {mood}, {period} (60-80s,
 #   90-2000s, 2010s+), {decade} (80s, 90s...) and {year} can be used.
+notion_sort_db = cce7a625036646a791f987eb35a319ef
 sort_playlists = moto
 sort_playlist_name = {playlist} {mood} {period}
