@@ -83,6 +83,22 @@ class TrackInfo(unittest.TestCase):
         self.assertEqual(r.main_artist("K.Flay feat. Tom Morello"), "K.Flay")
         self.assertEqual(r.main_artist("Earth, Wind & Fire"), "Earth, Wind")  # full name is tried first
 
+    def test_artist_details(self):
+        original = r._lookup_artist
+        r._lookup_artist = lambda name: {
+            "The Streets": {"type": "Group", "area": {"name": "United Kingdom"},
+                            "life-span": {"begin": "1994"}},
+            "Pat Benatar": {"type": "Person", "country": "US", "life-span": {"begin": "1953-01-10"}},
+            "Bowie": {"type": "Person", "area": {"name": "United Kingdom"},
+                      "life-span": {"begin": "1947", "end": "2016"}}}.get(name, {})
+        try:
+            self.assertEqual(r.artist_details("The Streets"), "group · United Kingdom · since 1994")
+            self.assertEqual(r.artist_details("Pat Benatar"), "solo artist · US · born 1953")
+            self.assertEqual(r.artist_details("Bowie"), "solo artist · United Kingdom · 1947-2016")
+            self.assertEqual(r.artist_details("Unknown"), "")
+        finally:
+            r._lookup_artist = original
+
     def test_country_tries_full_name_first(self):
         asked = []
 
@@ -106,7 +122,7 @@ class TrackInfo(unittest.TestCase):
         info = r.track_info(match, {})
         info["country"] = "United States"
         self.assertEqual(r.info_line(info),
-                         "1981 · Rock · United States · Chrysalis · 24-bit/96 kHz · 4:05")
+                         "1981 · Rock · United States · Chrysalis · 4:05")
         shazam = {"genres": {"primary": "Pop"}, "sections": [{"metadata": [
             {"title": "Label", "text": "Hungaroton"}, {"title": "Released", "text": "1983"}]}]}
         self.assertEqual(r.info_line(r.track_info(None, shazam)), "1983 · Pop · Hungaroton")
