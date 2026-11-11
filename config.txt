@@ -30,8 +30,9 @@ mood_period_playlist = Radio {mood} {period}
 # intensity, loudness and brightness. Calm up to calm_max_energy (or under 80 BPM
 # without high energy), energetic from energetic_min_energy, groove in between.
 mood_names = Calme, Groove, Énergique
-calm_max_energy = 33
-energetic_min_energy = 66
+# Thresholds calibrated on 46 tracks (11/11/2026): about a third of the tracks in each mood.
+calm_max_energy = 53
+energetic_min_energy = 63
 
 # Notion database for tracks recognized but missing from the service.
 # Database ID (not secret). The token goes in the NOTION_TOKEN GitHub secret.
