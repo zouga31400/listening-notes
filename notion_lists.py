@@ -248,6 +248,28 @@ def handle(db, service, page):
     return True
 
 
+def count_pending():
+    """--count mode: writes pending=<n> to GITHUB_OUTPUT (1 on a Notion error, so the
+    processing job runs and reports it). Doesn't touch the music service."""
+    token = os.environ.get("NOTION_TOKEN", "").strip()
+    raw_db = config_value(CONFIG_KEY) or os.environ.get("NOTION_DATABASE_ID", "").strip()
+    if not token or not raw_db:
+        count = 0
+        lq.log(f"Notion lists: not configured (NOTION_TOKEN secret or {CONFIG_KEY} missing).")
+    else:
+        try:
+            count = len(Database(Notion(token), database_id(raw_db)).pending())
+            lq.log(f"{count} page(s) with the \"{TODO}\" status.")
+        except NotionError as e:
+            count = 1
+            lq.log(f"{e} (the processing job will run and report it)")
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a", encoding="utf-8") as f:
+            f.write(f"pending={count}\n")
+    return 0
+
+
 def main():
     token = os.environ.get("NOTION_TOKEN", "").strip()
     raw_db = config_value(CONFIG_KEY) or os.environ.get("NOTION_DATABASE_ID", "").strip()
@@ -284,4 +306,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(count_pending() if "--count" in sys.argv[1:] else main())

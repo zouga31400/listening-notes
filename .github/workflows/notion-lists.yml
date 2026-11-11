@@ -1,7 +1,9 @@
 name: Notion lists sync
+# Main trigger: an external call (cron-job.org) every 2 minutes to the workflow_dispatch
+# API, because GitHub's own schedule is unreliable. The schedule below is only a backup.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 concurrency:
@@ -12,7 +14,54 @@ permissions:
   contents: read
 
 jobs:
-  notion:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      pending: ${{ steps.count.outputs.pending }}
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install requests
+        run: pip install -q requests
+      - name: Count the Notion pages marked "To create"
+        id: count
+        run: python notion_lists.py --count
+      - name: Delete earlier runs that had nothing to do
+        # Keeps the Actions page readable: removes the runs of the last 2 hours whose
+        # processing job was skipped, and the runs GitHub cancelled while one was queued.
+        # Runs that processed pages, and failed runs, are kept.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          since=$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)
+          gh api -X GET "repos/$REPO/actions/workflows/notion-lists.yml/runs" \
+            -f status=completed -f per_page=100 -f created=">$since" --jq '.workflow_runs[] | "\(.id) \(.conclusion)"' | while read -r id conclusion; do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            delete=no
+            if [ "$conclusion" = "cancelled" ]; then
+              delete=yes
+            elif [ "$conclusion" = "success" ]; then
+              skipped=$(gh api "repos/$REPO/actions/runs/$id/jobs" \
+                --jq '[.jobs[] | select(.name == "process" and .conclusion == "skipped")] | length')
+              [ "$skipped" = "1" ] && delete=yes
+            fi
+            if [ "$delete" = "yes" ]; then
+              gh api -X DELETE "repos/$REPO/actions/runs/$id" >/dev/null && echo "Deleted run $id ($conclusion)"
+            fi
+          done
+
+  process:
+    name: process
+    needs: check
+    if: needs.check.outputs.pending != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

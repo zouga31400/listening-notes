@@ -81,7 +81,7 @@ suggestions_name = Suggestions {playlist}
 suggestions_count = 30
 suggestions_per_artist = 1
 
-# Notion database for playlists to create ("Notion lists sync" workflow, every 15 min).
+# Notion database for playlists to create ("Notion lists sync" workflow, every 2 min).
 # One page per playlist: title = playlist name, content = one "Artist - Title" line
 # per track, Status = "To create". Uses the same NOTION_TOKEN secret.
 notion_lists_db = ea8e66660faa4ce299e2f599916f1058
