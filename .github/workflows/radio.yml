@@ -24,7 +24,6 @@ jobs:
       STREAM_URL: ${{ secrets.STREAM_URL }}
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-      MUSIC_WEB_URL: ${{ secrets.MUSIC_WEB_URL }}
       STREAM_URL_BACKUP: ${{ secrets.STREAM_URL_BACKUP }}
       HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
       SHOW_END_TOPIC: ${{ secrets.SHOW_END_TOPIC }}
