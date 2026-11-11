@@ -985,13 +985,22 @@ async def main():
 
     ended_at = datetime.now(PARIS)
     if detector.ended:
-        log(f"Show end detected at {ended_at:%H:%M} ({detector.streak} tracks in a row)")
-        notify("Show ended", f"show-ended {ended_at.isoformat(timespec='seconds')}",
+        # The show really ended when the first ignored track started.
+        first = detector.dropped[0] if detector.dropped else None
+        try:
+            offset = float(first["out"]["matches"][0]["offset"])
+            show_end = first["sample_start"] - timedelta(seconds=max(0, offset))
+        except (TypeError, KeyError, IndexError, ValueError):
+            show_end = ended_at
+        log(f"Show end detected at {ended_at:%H:%M} ({detector.streak} tracks in a row), "
+            f"show ended around {show_end:%H:%M}")
+        notify("Show ended", f"show-ended {ended_at.isoformat(timespec='seconds')} "
+               f"ends-at {show_end.isoformat(timespec='seconds')}",
                tags=["show_end"], topic=SHOW_END_TOPIC or None)
         if SHOW_END_TOPIC:   # the signal went to another topic: tell the user too
             notify("Radio listening: show ended",
-                   f"End of the show detected at {ended_at:%H:%M} "
-                   f"({detector.streak} tracks in a row).", tags=["show_end"])
+                   f"End of the show detected at {ended_at:%H:%M} ({detector.streak} tracks "
+                   f"in a row); the show ended around {show_end:%H:%M}.", tags=["show_end"])
     else:
         log(f"No show end detected, stopped at the time limit ({ended_at:%H:%M})")
         for item in detector.finish():
