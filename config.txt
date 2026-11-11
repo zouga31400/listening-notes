@@ -15,13 +15,23 @@ previous_main_playlist = Github
 daily_playlist = Radio {date}
 monthly_playlist = Radio {month}
 
-# Playlists by decade and genre, created automatically on first use.
+# Playlists by decade, genre and mood, created automatically on first use.
 # {decade} becomes 60s, 70s, 80s, 90s, 2000s...; {genre} is the album's genre on the
-# service (the original year is used, not the date of a remaster).
+# service (the original year is used, not the date of a remaster); {period} is
+# 60-80s, 90-2000s or 2010s+; {mood} is one of mood_names below.
 # Leave a value empty to turn that kind of playlist off.
 decade_playlist = Radio {decade}
 genre_playlist =
-genre_decade_playlist = Radio {genre} {decade}
+genre_decade_playlist =
+mood_playlist =
+mood_period_playlist = Radio {mood} {period}
+
+# Moods, measured on a 30-second preview of each track: energy (0-100) mixes rhythmic
+# intensity, loudness and brightness. Calm up to calm_max_energy (or under 80 BPM
+# without high energy), energetic from energetic_min_energy, groove in between.
+mood_names = Calme, Groove, Énergique
+calm_max_energy = 33
+energetic_min_energy = 66
 
 # Notion database for tracks recognized but missing from the service.
 # Database ID (not secret). The token goes in the NOTION_TOKEN GitHub secret.
