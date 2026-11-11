@@ -85,3 +85,11 @@ suggestions_per_artist = 1
 # One page per playlist: title = playlist name, content = one "Artist - Title" line
 # per track, Status = "To create". Uses the same NOTION_TOKEN secret.
 notion_lists_db = ea8e66660faa4ce299e2f599916f1058
+
+# Copies of a playlist sorted by mood and period ("Sort a playlist by mood and period"
+# workflow, started by hand). Moods use the thresholds above (calm_max_energy...).
+# sort_playlists: playlists to sort, comma-separated.
+# sort_playlist_name: name of each copy; {playlist}, {mood}, {period} (60-80s,
+#   90-2000s, 2010s+), {decade} (80s, 90s...) and {year} can be used.
+sort_playlists = moto
+sort_playlist_name = {playlist} {mood} {period}
