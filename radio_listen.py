@@ -77,7 +77,7 @@ def log_detail(*args):
 _ntfy_failed = False
 
 
-def notify(title, message, tags=(), priority=3, click=None, topic=None):
+def notify(title, message, tags=(), priority=3, click=None, topic=None, image=None, actions=()):
     """Push notification through ntfy (secret NTFY_TOPIC: a topic name on ntfy.sh,
     or a full https://server/topic URL). Never stops the script if it fails."""
     global _ntfy_failed
@@ -91,7 +91,10 @@ def notify(title, message, tags=(), priority=3, click=None, topic=None):
     try:
         r = requests.post(server, timeout=10, json={
             "topic": topic, "title": title[:250], "message": message[:3000],
-            "tags": list(tags), "priority": priority, **({"click": click} if click else {})})
+            "tags": list(tags), "priority": priority, **({"click": click} if click else {}),
+            **({"attach": image} if image else {}),
+            **({"actions": [{"action": "view", "label": label, "url": url, "clear": True}
+                            for label, url in actions if url][:3]} if actions else {})})
         r.raise_for_status()
     except Exception as e:
         if not _ntfy_failed:
@@ -366,11 +369,15 @@ def artist_country(name):
     return country
 
 
-def _lookup_country(name):
+_artists = {}
+
+
+def _lookup_artist(name):
+    """MusicBrainz record of an artist (exact name, high score), cached; {} when unknown."""
     if not name:
-        return ""
-    if name.lower() not in _countries:
-        country = ""
+        return {}
+    if name.lower() not in _artists:
+        found = {}
         try:
             r = requests.get(MUSICBRAINZ, timeout=6,
                              params={"query": f'artist:"{name}"', "fmt": "json", "limit": 3},
@@ -378,12 +385,60 @@ def _lookup_country(name):
             r.raise_for_status()
             for a in r.json().get("artists", []):
                 if int(a.get("score") or 0) >= 90 and flat(a.get("name")) == flat(name):
-                    country = ((a.get("area") or {}).get("name") or a.get("country") or "")
+                    found = a
                     break
         except Exception:
             pass
-        _countries[name.lower()] = country
-    return _countries[name.lower()]
+        _artists[name.lower()] = found
+    return _artists[name.lower()]
+
+
+def _lookup_country(name):
+    a = _lookup_artist(name)
+    return (a.get("area") or {}).get("name") or a.get("country") or ""
+
+
+def artist_details(name):
+    """'group · United Kingdom · since 1994' from MusicBrainz, '' when unknown."""
+    name = (name or "").strip()
+    a = _lookup_artist(name) or _lookup_artist(main_artist(name))
+    if not a:
+        return ""
+    kind = {"Group": "group", "Person": "solo artist", "Orchestra": "orchestra",
+            "Choir": "choir", "Duo": "duo"}.get(a.get("type") or "", "")
+    country = (a.get("area") or {}).get("name") or a.get("country") or ""
+    span = a.get("life-span") or {}
+    begin, end = (span.get("begin") or "")[:4], (span.get("end") or "")[:4]
+    if begin and end:
+        years = f"{begin}-{end}"
+    elif begin:
+        years = f"since {begin}" if kind != "solo artist" else f"born {begin}"
+    else:
+        years = ""
+    return " · ".join(p for p in (kind, country, years) if p)
+
+
+def similar_artists(name, count=3):
+    """Related artists from Deezer's public API."""
+    try:
+        r = requests.get(f"{DEEZER}/search/artist", timeout=8,
+                         params={"q": main_artist(name), "limit": 1})
+        hits = r.json().get("data", []) if r.ok else []
+        if not hits:
+            return []
+        r = requests.get(f"{DEEZER}/artist/{hits[0]['id']}/related", timeout=8,
+                         params={"limit": count})
+        return [a["name"] for a in (r.json().get("data", []) if r.ok else [])][:count]
+    except Exception:
+        return []
+
+
+def track_image(track, match):
+    """Artist photo as Shazam shows it, else the cover art."""
+    images = track.get("images") or {}
+    album = (match or {}).get("album") or {}
+    return (images.get("background") or images.get("coverarthq") or images.get("coverart")
+            or (album.get("image") or {}).get("large"))
 
 
 def shazam_meta(track, field):
@@ -588,7 +643,7 @@ def info_line(info, with_label=True):
     parts = [str(info["year"]) if info.get("year") else "", info.get("genre", ""),
              info.get("mood", ""), f"{info['bpm']} BPM" if info.get("bpm") and with_label else "",
              info.get("country", ""), info.get("label", "") if with_label else "",
-             info.get("quality", ""), info.get("length", "") if with_label else ""]
+             info.get("length", "") if with_label else ""]
     return " · ".join(p for p in parts if p)
 
 
@@ -1040,25 +1095,38 @@ async def main():
                 plays = history.count_plays(artist, title)
             except Exception:
                 pass
-        details = info_line(info)
-        heard = (f"\nHeard {plays} time{'s' if plays > 1 else ''} before." if plays
-                 else "\nFirst time heard.")
         short = info_line(info, with_label=False)
         suffix = f" ({short})" if short else ""
-        extra = (f"\n{details}" if details else "") + heard
-        if status == "Added":
-            recap.append(f"+ {artist} - {title}{suffix}")
-            notify(f"{artist} - {title}", f"Added to the playlists. Album: {album_name}" + extra,
-                   tags=["musical_note"], click=track.get("url"))
-        elif status == "Already present":
-            recap.append(f"= {artist} - {title}{suffix}")
-            notify(f"{artist} - {title}", f"Already in the playlists. Album: {album_name}" + extra,
-                   tags=["repeat"], click=track.get("url"))
-        else:
-            recap.append(f"? {artist} - {title}{suffix}")
-            notify(f"{artist} - {title}", "Not found on the service"
-                   + (", noted in Notion" if notion else "") + extra,
-                   tags=["warning"], click=track.get("url"))
+        recap.append(f"{ {'Added': '+', 'Already present': '='}.get(status, '?') } "
+                     f"{artist} - {title}{suffix}")
+        main_name = (match or {}).get("performer", {}).get("name") or artist
+        lines = []
+        if match is None:
+            lines.append("⚠️ Not on the music service" + (" (noted in Notion)" if notion else ""))
+        album_title = (match or {}).get("album", {}).get("title") or shazam_meta(track, "Album")
+        if album_title:
+            lines.append(album_title + (f" ({info['year']})" if info.get("year") else ""))
+        detail = " · ".join(p for p in (info.get("genre"), info.get("mood"),
+                                        f"{info['bpm']} BPM" if info.get("bpm") else "",
+                                        info.get("length")) if p)
+        if detail:
+            lines.append(detail)
+        about = artist_details(main_name)
+        if about:
+            lines.append(f"{main_name}: {about}")
+        if info.get("label"):
+            lines.append(f"Label: {info['label']}")
+        similar = similar_artists(main_name)
+        if similar:
+            lines.append("Similar: " + ", ".join(similar))
+        lines.append(f"Heard {plays} time{'s' if plays > 1 else ''} before." if plays
+                     else "First time heard.")
+        web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
+        service_url = f"{web}/track/{match['id']}" if (web and match) else None
+        notify(f"{title} — {artist}", "\n".join(lines),
+               tags=["warning"] if match is None else ["musical_note"],
+               click=service_url or track.get("url"), image=track_image(track, match),
+               actions=[("Open in the music app", service_url), ("Shazam", track.get("url"))])
         if history:
             try:
                 offset = float(item["out"]["matches"][0]["offset"])
