@@ -2,6 +2,8 @@
 
 When I ask "Music list: <request>" (or "Liste musique : <request>"), produce a list of tracks that fits the request (30 tracks unless I say otherwise), in original studio versions, with exact artist and track names, and no duplicates. Write it in the expected format to lists/<short-name-without-accents>.txt, with a clear playlist name on the first line. Commit and push. Do not modify any other file. To fix an error reported in a log, modify lists_sync.py or the workflow only.
 
+When the request is the music of a film (or a series), list only the songs and existing tracks heard in it (licensed songs, original songs written for it, and existing instrumental tracks such as "Misirlou" in Pulp Fiction). Leave out the score composed for the film (orchestral themes and cues). If the film has few such tracks, give a shorter list with only those and say why it is short, instead of filling it with the score.
+
 ## Expected format
 
 ```
