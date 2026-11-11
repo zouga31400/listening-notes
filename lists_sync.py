@@ -321,7 +321,6 @@ class MusicService:
 
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt")
-DEFAULT_AUTHOR = "fsyl20"
 
 
 def config_value(key):
@@ -339,10 +338,16 @@ def config_value(key):
     return ""
 
 
+# Default author: the PLAYLIST_AUTHOR secret (kept out of this public repository and
+# masked in the logs). Without it, the description doesn't name anyone.
+NO_AUTHOR_DESCRIPTION = "Created from a list"
+
+
 def description_for(author=None):
-    """Playlist description: "Created by <author>" (request's author, else config.txt)."""
-    author = " ".join((author or "").split())[:60] or config_value("playlist_author") or DEFAULT_AUTHOR
-    return f"Created by {author}"
+    """Playlist description: "Created by <author>" (request's author, else the
+    PLAYLIST_AUTHOR secret), or "Created from a list" when there is none."""
+    author = " ".join((author or os.environ.get("PLAYLIST_AUTHOR", "")).split())[:60]
+    return f"Created by {author}" if author else NO_AUTHOR_DESCRIPTION
 
 
 # Playlists created by this tool (current or older French description). Only these are
@@ -350,7 +355,7 @@ def description_for(author=None):
 # "Created by lists_sync.py" (older playlists carry the previous script name, list_<name>.py).
 MANAGED_RE = re.compile(r"\b(?:lists_sync|list(?:e|es|s)?_\w+)\.py\b", re.IGNORECASE)
 # Current description: exactly "Created by <author>" on one short line.
-MANAGED_AUTHOR_RE = re.compile(r"^\s*Created by [^\n]{1,60}$")
+MANAGED_AUTHOR_RE = re.compile(r"^\s*(?:Created by [^\n]{1,60}|Created from a list)\s*$")
 
 
 def is_managed(playlist):
@@ -581,7 +586,7 @@ def build_playlist(service, name, entries, bad, source, film=None, author=None):
         if managed and (existing.get("description") or "").strip() != description:
             try:
                 service.set_description(playlist_id, description)
-                log(f"  Description set to \"{description}\".")
+                log("  Description updated.")   # not printed: it may hold the author's name
             except ServiceError as e:
                 log(f"  Description not updated: {e}")
     else:

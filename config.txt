@@ -86,9 +86,10 @@ suggestions_per_artist = 1
 # per track, Status = "To create". Uses the same NOTION_TOKEN secret.
 notion_lists_db = ea8e66660faa4ce299e2f599916f1058
 
-# Author written in the description of the playlists made from lists ("Created by <author>").
-# A request can name another author ("Author: Marie" line, or the Notion page's Author property).
-playlist_author = fsyl20
+# The author written in the description of the playlists made from lists
+# ("Created by <author>") is the PLAYLIST_AUTHOR GitHub secret, kept out of this public
+# file. A request can name another author ("Author: Marie" line, or the Notion page's
+# Author property).
 
 # Copies of a playlist sorted by mood and period ("Sort a playlist by mood and period"
 # workflow, started by hand). Moods use the thresholds above (calm_max_energy...).
