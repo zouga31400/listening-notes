@@ -152,6 +152,43 @@ def text_block(kind, text):
             kind: {"rich_text": [{"type": "text", "text": {"content": text[:1900]}}]}}
 
 
+def rich_block(kind, parts):
+    """Block made of (text, url, bold) parts; url and bold may be None/False."""
+    rich = []
+    for text, url, bold in parts:
+        if not text:
+            continue
+        item = {"type": "text", "text": {"content": text[:1900], **({"link": {"url": url}} if url else {})}}
+        if bold:
+            item["annotations"] = {"bold": True}
+        rich.append(item)
+    return {"object": "block", "type": kind, kind: {"rich_text": rich}}
+
+
+def bookmark_block(url):
+    return {"object": "block", "type": "bookmark", "bookmark": {"url": url}}
+
+
+def image_block(url):
+    return {"object": "block", "type": "image",
+            "image": {"type": "external", "external": {"url": url}}}
+
+
+def track_block(row):
+    """One track in the radio's style: bold "Title — Artist" linked to the service,
+    then the album and year."""
+    if row["status"] == "not found":
+        return rich_block("bulleted_list_item", [(f"✗ {row['line']}", None, False),
+                                                 (" — not found on the service", None, False)])
+    title = row.get("title") or row["found"]
+    head = f"{title} — {row['artist']}" if row.get("artist") else row["found"]
+    album = " · ".join(p for p in (row.get("album"), row.get("year")) if p)
+    return rich_block("bulleted_list_item", [
+        (head, lq.web_link("track", row.get("track_id")), True),
+        (f"  {album}" if album else "", None, False),
+        ("  ✦ new" if row["status"] == "added" else "", None, False)])
+
+
 class Database:
     def __init__(self, notion, db_id):
         self.notion, self.id = notion, db_id
@@ -182,7 +219,7 @@ class Database:
         return plain(prop.get("title")).strip()
 
     def finish(self, page_id, status, added=None, missing=None, link=None, blocks=(),
-               old_report=()):
+               old_report=(), cover=None):
         props = {STATUS_PROP: {self.status_type: {"name": status}}}
         if added is not None and self.props.get("Added") == "number":
             props["Added"] = {"number": added}
@@ -198,62 +235,59 @@ class Database:
             for i in range(0, len(children), 100):
                 self.notion.call("PATCH", f"/blocks/{page_id}/children",
                                  {"children": children[i:i + 100]})
-        self.notion.call("PATCH", f"/pages/{page_id}", {"properties": props})
+        body = {"properties": props}
+        if cover:   # like the radio's pages: the cover art as page cover and icon
+            body["cover"] = {"type": "external", "external": {"url": cover}}
+            body["icon"] = {"type": "external", "external": {"url": cover}}
+        self.notion.call("PATCH", f"/pages/{page_id}", body)
 
 
 def album_blocks(name, result, link):
     album = result["album"]
-    blocks = [
+    return [
+        rich_block("paragraph", [(album["title"], link, True),
+                                 (f" — {album['artist']}" if album["artist"] else "", None, False)]),
         text_block("paragraph",
-                   f"No playlist created: the album \"{album['title']}\""
-                   + (f" ({album['artist']})" if album["artist"] else "")
-                   + f" already has all {album['wanted']} songs of \"{name}\", and they make up "
-                     f"most of its {album['tracks_count']} tracks."),
-        *([text_block("paragraph", f"Album: {link}")] if link else []),
+                   f"No playlist created: this soundtrack album already has all "
+                   f"{lq.plural(album['wanted'], 'song')} of \"{name}\", and they make up most "
+                   f"of its {lq.plural(album['tracks_count'], 'track')}."),
+        *([bookmark_block(link)] if link else []),
         text_block("paragraph", "To get a playlist anyway, clear the Film property (and any "
                                 "\"Film:\" line), then set Status back to \"To create\"."),
     ]
-    return blocks
 
 
 def report_blocks(name, result, bad, link):
-    action = ("created" if result["created"] else
-              "synced with the list" if result["synced"] else "completed")
-    blocks = [
-        text_block("paragraph",
-                   f"Playlist \"{name}\" {action}: {result['added']} added, "
-                   f"{result['already']} already present, {len(result['removed'])} removed, "
-                   f"{len(result['missing'])} not found."),
-        *([text_block("paragraph", f"Link: {link}")] if link else []),
-        text_block("paragraph", "To fix a track: correct or replace its line above (exact artist "
-                                "and title), then set Status back to \"To create\". Tracks no "
-                                "longer chosen are removed from the playlist."),
-    ]
+    found = [r for r in result["tracks"] if r["status"] != "not found"]
+    action = ("Playlist created" if result["created"] else
+              "Playlist synced with the list" if result["synced"] else "Playlist completed")
+    counts = [lq.plural(len(found), "track")]
+    for value, text in ((result["added"], "new"), (len(result["removed"]), "removed"),
+                        (len(result["missing"]), "not found")):
+        if value:
+            counts.append(f"{value} {text}")
+    blocks = [rich_block("paragraph", [(action, None, True), (" · " + " · ".join(counts), None, False)])]
+    if link:
+        blocks.append(bookmark_block(link))
     album = result.get("album")
     if album:
         album_link = lq.web_link("album", album["id"])
-        text = (f"Soundtrack album \"{album['title']}\": {album['covered']} of the "
-                f"{album['wanted']} songs")
-        text += (", but most of its tracks are the score." if album["covered"] == album["wanted"]
-                 else f"; missing: {'; '.join(album['missing'][:10])}.")
-        blocks.append(text_block("paragraph", text + (f" {album_link}" if album_link else "")))
+        text = (f": {album['covered']} of the {album['wanted']} songs"
+                + (", but most of its tracks are the score." if album["covered"] == album["wanted"]
+                   else f"; missing: {'; '.join(album['missing'][:10])}."))
+        blocks.append(rich_block("paragraph", [("Soundtrack album ", None, False),
+                                               (album["title"], album_link, True), (text, None, False)]))
     blocks.append(text_block("heading_3", "Tracks"))
-    for row in result["tracks"]:
-        if row["status"] == "not found":
-            text = f"✗ {row['line']} — not found on the service"
-        else:
-            text = f"✓ {row['found']}"
-            if row.get("album"):
-                text += f" · album: {row['album']}"
-            if row["status"] == "added":
-                text += " (new)"
-        blocks.append(text_block("bulleted_list_item", text))
+    blocks += [track_block(row) for row in result["tracks"]]
     if result["removed"]:
         blocks.append(text_block("heading_3", "Removed from the playlist"))
         blocks += [text_block("bulleted_list_item", r) for r in result["removed"]]
     if bad:
         blocks.append(text_block("heading_3", "Unreadable lines"))
         blocks += [text_block("bulleted_list_item", t) for _, t in bad]
+    blocks.append(text_block("paragraph", "To fix a track: correct or replace its line above (exact "
+                                          "artist and title), then set Status back to \"To create\". "
+                                          "Tracks no longer chosen are removed from the playlist."))
     return blocks
 
 
@@ -284,13 +318,15 @@ def handle(db, service, page):
     if result.get("redirect"):
         link = lq.web_link("album", result["album"]["id"])
         db.finish(page_id, ALBUM, added=0, missing=0, link=link,
-                  blocks=album_blocks(name, result, link), old_report=old_report)
-        lq.notify_result(result, link=link or page.get("url"))
+                  blocks=album_blocks(name, result, link), old_report=old_report,
+                  cover=result["album"].get("cover") or None)
+        lq.notify_result(result, link=link or page.get("url"), page_url=page.get("url"))
         return True
     link = lq.web_link("playlist", result["playlist_id"])
+    cover = next((r["cover"] for r in result["tracks"] if r.get("cover")), None)
     db.finish(page_id, DONE, added=result["added"], missing=len(result["missing"]), link=link,
-              blocks=report_blocks(name, result, bad, link), old_report=old_report)
-    lq.notify_result(result, link=link or page.get("url"))
+              blocks=report_blocks(name, result, bad, link), old_report=old_report, cover=cover)
+    lq.notify_result(result, link=link or page.get("url"), page_url=page.get("url"))
     return True
 
 

@@ -60,8 +60,9 @@ def log(*args):
 _ntfy_failed = False
 
 
-def notify(title, message, tags=(), priority=3, click=None):
-    """Sends a push notification; never stops the run if it fails."""
+def notify(title, message, tags=(), priority=3, click=None, image=None, actions=()):
+    """Sends a push notification (same style as the radio: picture and buttons);
+    never stops the run if it fails."""
     global _ntfy_failed
     target = os.environ.get("NTFY_LISTS_TOPIC", "").strip()
     if not target:
@@ -70,10 +71,13 @@ def notify(title, message, tags=(), priority=3, click=None):
         server, _, topic = target.rstrip("/").rpartition("/")
     else:
         server, topic = "https://ntfy.sh", target
+    buttons = [{"action": "view", "label": label, "url": url, "clear": True}
+               for label, url in actions if url][:3]
     try:
         r = requests.post(server, timeout=10, json={
             "topic": topic, "title": title[:250], "message": message[:3000],
-            "tags": list(tags), "priority": priority, **({"click": click} if click else {})})
+            "tags": list(tags), "priority": priority, **({"click": click} if click else {}),
+            **({"attach": image} if image else {}), **({"actions": buttons} if buttons else {})})
         r.raise_for_status()
     except Exception as e:
         if not _ntfy_failed:
@@ -81,31 +85,63 @@ def notify(title, message, tags=(), priority=3, click=None):
             _ntfy_failed = True
 
 
-def notify_result(result, link=None):
-    """Notification at the end of a playlist: what was added, removed, not found."""
+def track_cover(item):
+    """Cover art of a track (its album) or of an album, largest size first."""
+    image = (item.get("image") or (item.get("album") or {}).get("image") or {})
+    return image.get("large") or image.get("small") or image.get("thumbnail") or ""
+
+
+def plural(n, word):
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def notify_result(result, link=None, page_url=None):
+    """Notification at the end of a playlist, in the radio's style: the cover of the
+    first track, the first tracks as "Title — Artist", buttons to the playlist and Notion."""
     name = result["name"]
     album = result.get("album")
     if result.get("redirect") and album:
-        notify(f"Album found: {album['title']}",
-               f"No playlist created: this album has all {album['wanted']} songs of "
-               f"\"{name}\".", tags=["cd"], click=web_link("album", album["id"]) or link)
+        album_link = web_link("album", album["id"]) or link
+        lines = [f"Soundtrack album · {plural(album['tracks_count'], 'track')}",
+                 f"It already has all {plural(album['wanted'], 'song')} of \"{name}\": "
+                 "no playlist created."]
+        if album.get("artist"):
+            lines.insert(1, album["artist"])
+        notify(album["title"], "\n".join(lines), tags=["cd"], click=album_link,
+               image=album.get("cover") or None,
+               actions=[("Open the album", album_link), ("Notion", page_url)])
         return
-    action = ("created" if result.get("created") else
-              "updated" if result.get("added") or result.get("removed") else "already up to date")
-    lines = [f"{result.get('added', 0)} added, {result.get('already', 0)} already there, "
-             f"{len(result.get('removed', []))} removed, {len(result.get('missing', []))} not found."]
+    rows = [r for r in result.get("tracks", []) if r.get("status") != "not found"]
+    action = ("Playlist created" if result.get("created") else
+              "Playlist updated" if result.get("added") or result.get("removed") else
+              "Playlist up to date")
+    counts = [plural(len(rows), "track")]
+    if not result.get("created"):
+        if result.get("added"):
+            counts.append(f"+{result['added']} new")
+        if result.get("removed"):
+            counts.append(f"−{len(result['removed'])} removed")
+    lines = [f"{action} · " + " · ".join(counts)]
+    lines += [f"• {r['title']} — {r['artist']}" for r in rows[:5] if r.get("title")]
+    if len(rows) > 5:
+        lines.append(f"  and {len(rows) - 5} more")
     if result.get("missing"):
-        lines.append("Not found: " + "; ".join(result["missing"][:10])
-                     + (" ..." if len(result["missing"]) > 10 else ""))
+        lines.append("Not found: " + "; ".join(result["missing"][:5])
+                     + (" ..." if len(result["missing"]) > 5 else ""))
     if album:
-        lines.append(f"Album \"{album['title']}\": {album['covered']} of {album['wanted']} songs"
-                     + (f" - {web_link('album', album['id'])}" if web_link("album", album["id"]) else ""))
-    tags = ["warning"] if result.get("missing") else ["white_check_mark"]
-    notify(f"Playlist {action}: {name}", "\n".join(lines), tags=tags, click=link)
+        lines.append(f"Soundtrack album \"{album['title']}\": {album['covered']} of "
+                     f"{album['wanted']} songs")
+    cover = next((r["cover"] for r in rows if r.get("cover")), None)
+    notify(name, "\n".join(lines),
+           tags=["warning"] if result.get("missing") else ["musical_note"], click=link,
+           image=cover, actions=[("Open in the music app", link),
+                                 ("Soundtrack album", web_link("album", album["id"]) if album else None),
+                                 ("Notion", page_url)])
 
 
 def notify_error(name, error, link=None):
-    notify(f"Playlist error: {name}", str(error), tags=["x"], priority=4, click=link)
+    notify(f"Playlist error: {name}", str(error), tags=["x"], priority=4, click=link,
+           actions=[("Notion", link)])
 
 
 def norm(text):
@@ -498,7 +534,7 @@ def soundtrack_album(service, film, entries):
                 continue
             missing = [f"{a} - {t}" for a, t in wanted
                        if not any(score(tr, norm(a), norm(t), t.lower()) is not None for tr in tracks)]
-            found = {"id": album_id, "title": title,
+            found = {"id": album_id, "title": title, "cover": track_cover(album) or track_cover(item),
                      "artist": ((album.get("artist") or item.get("artist") or {}).get("name") or ""),
                      "tracks_count": len(tracks), "covered": len(wanted) - len(missing),
                      "wanted": len(wanted), "missing": missing}
@@ -609,7 +645,12 @@ def build_playlist(service, name, entries, bad, source, film=None, author=None):
             log(f"  Not found: {artist} - {title}")
             continue
         album = (track.get("album") or {}).get("title") or ""
-        row = {"line": f"{artist} - {title}", "found": label(track), "album": album}
+        released = ((track.get("album") or {}).get("release_date_original") or "")[:4]
+        row = {"line": f"{artist} - {title}", "found": label(track), "album": album,
+               "title": " ".join(f"{track.get('title') or title} "
+                                 f"{('(' + track['version'] + ')') if track.get('version') else ''}".split()),
+               "artist": (track.get("performer") or {}).get("name") or artist,
+               "track_id": track.get("id"), "cover": track_cover(track), "year": released}
         if track["id"] in present or track["id"] in chosen:
             already += 1
             row["status"] = "present"
