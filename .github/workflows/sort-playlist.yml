@@ -1,0 +1,33 @@
+name: Sort a playlist by mood and period
+# Started by hand: copies of a playlist (e.g. Moto) sorted by mood (tempo and energy
+# measured on a 30-second preview) and period, named from sort_playlist_name in config.txt.
+on:
+  workflow_dispatch:
+    inputs:
+      playlists:
+        description: "Playlists to sort (comma-separated; empty = config.txt)"
+        default: ""
+
+jobs:
+  sort:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
+      MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
+      MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
+      MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
+      PLAYLISTS: ${{ github.event.inputs.playlists }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/workflows/sort-playlist.yml
+      - name: Install the tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+          pip install -q requests librosa==0.11.0
+      - name: Sort the playlists
+        run: python sort_playlist.py
