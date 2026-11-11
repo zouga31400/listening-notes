@@ -20,6 +20,9 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.t
 STREAM_URL = os.environ.get("STREAM_URL", "").strip()
 STREAM_URL_BACKUP = os.environ.get("STREAM_URL_BACKUP", "").strip()   # optional
 HEALTHCHECK_URL = os.environ.get("HEALTHCHECK_URL", "").strip().rstrip("/")  # optional
+# ntfy topic that receives the "show ended" signal (other tools can watch it);
+# optional, the NTFY_TOPIC secret is used when it is not set.
+SHOW_END_TOPIC = os.environ.get("SHOW_END_TOPIC", "").strip()
 NOTION_TOKEN = os.environ.get("NOTION_TOKEN", "").strip()
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "").strip()
 EMAIL = os.environ.get("MUSIC_EMAIL", "").strip()
@@ -75,16 +78,17 @@ def log_detail(*args):
 _ntfy_failed = False
 
 
-def notify(title, message, tags=(), priority=3, click=None):
+def notify(title, message, tags=(), priority=3, click=None, topic=None):
     """Push notification through ntfy (secret NTFY_TOPIC: a topic name on ntfy.sh,
     or a full https://server/topic URL). Never stops the script if it fails."""
     global _ntfy_failed
-    if not NTFY_TOPIC:
+    target = topic or NTFY_TOPIC
+    if not target:
         return
-    if NTFY_TOPIC.startswith("http"):
-        server, _, topic = NTFY_TOPIC.rstrip("/").rpartition("/")
+    if target.startswith("http"):
+        server, _, topic = target.rstrip("/").rpartition("/")
     else:
-        server, topic = "https://ntfy.sh", NTFY_TOPIC
+        server, topic = "https://ntfy.sh", target
     try:
         r = requests.post(server, timeout=10, json={
             "topic": topic, "title": title[:250], "message": message[:3000],
@@ -592,6 +596,49 @@ def old_daily_playlists(playlists, pattern, keep_days, today):
     return old
 
 
+class EndDetector:
+    """Detects the end of the show: after end_detection_from, a run of `streak` tracks
+    played back to back (no speech between them) means the show is over and the station
+    is playing music only. The first track of the run belongs to the show and is kept;
+    the following ones are held back, then dropped if the run reaches `streak`, or kept
+    if the host speaks again."""
+
+    def __init__(self, streak):
+        self.streak = max(2, streak)
+        self.speech = True      # was there speech since the last track?
+        self.run = 0            # tracks played back to back so far
+        self.held = []          # tracks held back while the run is growing
+        self.ended = False
+        self.dropped = []       # tracks played after the show, ignored
+
+    def on_speech(self):
+        """Speech (no music recognized). Returns the held tracks, now known to be part of the show."""
+        self.speech = True
+        self.run = 0
+        held, self.held = self.held, []
+        return held
+
+    def on_track(self, item, active):
+        """A new confirmed track. Returns the tracks to keep now."""
+        if self.speech:
+            self.speech = False
+            self.run = 1
+            return [item]
+        self.run += 1
+        if not active:
+            return [item]
+        self.held.append(item)
+        if self.run >= self.streak:
+            self.ended = True
+            self.dropped, self.held = self.held, []
+        return []
+
+    def finish(self):
+        """At the hard end: held tracks are kept (the run was not long enough)."""
+        held, self.held = self.held, []
+        return held
+
+
 EARLY_START_MINUTES = 45   # a scheduled run may start up to this long before listen_start
 LATEST_START = (23, 30)    # a scheduled run starting after this time does nothing
 
@@ -619,7 +666,10 @@ def compute_window(config):
     if now.weekday() >= 5 or not (earliest <= now < latest):
         log("Outside the listening window, nothing to do.")
         sys.exit(0)
-    end = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    hour, minute = parse_hhmm(config.get("latest_end"), (2, 0))
+    end = (now + timedelta(days=1)).replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if end - now > timedelta(hours=5, minutes=50):      # GitHub stops a job after 6 hours
+        end = now + timedelta(hours=5, minutes=50)
     return listen_from, end
 
 
@@ -716,6 +766,16 @@ async def main():
            + f". Playlists: {', '.join(t['name'] for t in targets)}.",
            tags=["radio"])
 
+    hour, minute = parse_hhmm(config.get("end_detection_from"), (0, 0))
+    detect_from = (start + timedelta(days=1)).replace(hour=hour, minute=minute, second=0,
+                                                       microsecond=0)
+    if TEST_MODE:
+        detect_from = start          # tests can try the end detection at any time
+    value = config.get("end_streak", "3")
+    detector = EndDetector(int(value) if value.isdigit() else 3)
+    log(f"Show end detection from {detect_from:%H:%M}: {detector.streak} tracks in a row, "
+        f"listening at most until {end:%H:%M}")
+
     shazam = Shazam()
     seen = set()
     durations = {}
@@ -726,7 +786,80 @@ async def main():
     pending = None      # first sighting of a track waiting for confirmation
     recap = []          # "symbol Artist - Title" lines for the end-of-session notification
 
-    while datetime.now(PARIS) < end:
+    def keep(item):
+        """Adds a confirmed track to the playlists, Notion and the notifications."""
+        nonlocal noted, logged
+        artist, title, track, match = item["artist"], item["title"], item["track"], item["match"]
+        status, album_name, duration = "Not found", None, None
+        if match is None:
+            log_detail(f"   No match on the service: {artist} - {title}")
+            if notion:
+                try:
+                    if notion.add_missing(artist, title, track.get("url"), start):
+                        noted += 1
+                except Exception as e:
+                    log(f"   Notion failure ({type(e).__name__})")
+        else:
+            done = []
+            for t in targets:
+                if match["id"] in t["present"]:
+                    continue
+                try:
+                    service.call("POST", "/playlist/addTracks", playlist_id=t["id"],
+                                 track_ids=str(match["id"]), no_duplicate="true")
+                    t["present"].add(match["id"])
+                    t["added"] += 1
+                    done.append(t["label"])
+                except Exception as e:
+                    log(f"   Could not add ({t['label']}): {type(e).__name__}")
+            album_name = (match.get("album") or {}).get("title") or "?"
+            status = "Added" if done else "Already present"
+            duration = match.get("duration")
+            version = f" ({match['version']})" if match.get("version") else ""
+            log_detail(f"   {'ADDED (' + ', '.join(done) + ')' if done else 'Already present'}: "
+                       f"{match['performer']['name']} - {match['title'].strip()}{version}"
+                       f" [album: {album_name}] (id {match['id']})")
+        info = track_info(match, track)
+        info["country"] = artist_country((match or {}).get("performer", {}).get("name") or artist)
+        plays = 0
+        if history:
+            try:
+                plays = history.count_plays(artist, title)
+            except Exception:
+                pass
+        details = info_line(info)
+        heard = (f"\nHeard {plays} time{'s' if plays > 1 else ''} before." if plays
+                 else "\nFirst time heard.")
+        short = info_line(info, with_label=False)
+        suffix = f" ({short})" if short else ""
+        extra = (f"\n{details}" if details else "") + heard
+        if status == "Added":
+            recap.append(f"+ {artist} - {title}{suffix}")
+            notify(f"{artist} - {title}", f"Added to the playlists. Album: {album_name}" + extra,
+                   tags=["musical_note"], click=track.get("url"))
+        elif status == "Already present":
+            recap.append(f"= {artist} - {title}{suffix}")
+            notify(f"{artist} - {title}", f"Already in the playlists. Album: {album_name}" + extra,
+                   tags=["repeat"], click=track.get("url"))
+        else:
+            recap.append(f"? {artist} - {title}{suffix}")
+            notify(f"{artist} - {title}", "Not found on the service"
+                   + (", noted in Notion" if notion else "") + extra,
+                   tags=["warning"], click=track.get("url"))
+        if history:
+            try:
+                offset = float(item["out"]["matches"][0]["offset"])
+            except (KeyError, IndexError, TypeError, ValueError):
+                offset = 0
+            song_start = item["sample_start"] - timedelta(seconds=max(0, offset))
+            try:
+                history.add_history(artist, title, song_start, status, album_name,
+                                    duration, track.get("url"), info)
+                logged += 1
+            except Exception as e:
+                log(f"   Notion history failure ({type(e).__name__})")
+
+    while datetime.now(PARIS) < end and not detector.ended:
         started = time.time()
         matched = False
         confirming = False
@@ -762,112 +895,44 @@ async def main():
                     unconfirmed += 1
                     log_detail(f"   Not confirmed, ignored: {pending['artist']} - {pending['title']}")
                     pending = None
-            if track:
+            if not track:
+                # Speech (or anything that is not a known track): held tracks belong to the show.
+                for item in detector.on_speech():
+                    keep(item)
+            else:
                 recognized += 1
                 matched = True
                 if key not in seen:
-                    isrc = (track.get("isrc") or "").strip().upper() or None
+                    item = None
                     if pending and pending["key"] == key:
-                        match, first = pending["match"], pending
-                        pending = None
+                        item, pending = pending, None
                     else:
                         log_detail(f"RECOGNIZED: {artist} - {title}")
+                        isrc = (track.get("isrc") or "").strip().upper() or None
                         match = find_match(service, artist, title, key, isrc)
-                        first = {"sample_start": sample_start, "out": out}
                         if match is not None:
                             durations[key] = match.get("duration")
+                        candidate = {"key": key, "artist": artist, "title": title, "track": track,
+                                     "match": match, "tries": 0, "sample_start": sample_start,
+                                     "out": out}
                         left = song_remaining(out, durations.get(key), sample_end)
                         # Ask for a second recognition, unless the song is about to end.
                         if confirmations > 1 and not (left is not None and left < CYCLE_SECONDS + 20):
                             if pending:
                                 unconfirmed += 1
-                            pending = {"key": key, "artist": artist, "title": title, "match": match,
-                                       "tries": 0, "sample_start": sample_start, "out": out}
+                            pending = candidate
                             log_detail("   Waiting for a confirmation")
                             confirming = True
-                    out_first = first["out"]
-                    status, album_name, duration = "Not found", None, None
-                    if confirming:
-                        pass  # decided at the next recognition
-                    elif match is None:
-                        log_detail("   No match on the service")
-                        if notion:
-                            try:
-                                if notion.add_missing(artist, title, track.get("url"), start):
-                                    noted += 1
-                                    log_detail("   Noted in Notion")
-                                else:
-                                    log_detail("   Already noted in Notion")
-                            except Exception as e:
-                                log(f"   Notion failure ({type(e).__name__})")
-                    else:
-                        durations[key] = match.get("duration")
-                        done = []
-                        for t in targets:
-                            if match["id"] in t["present"]:
-                                continue
-                            try:
-                                service.call("POST", "/playlist/addTracks", playlist_id=t["id"],
-                                           track_ids=str(match["id"]), no_duplicate="true")
-                                t["present"].add(match["id"])
-                                t["added"] += 1
-                                done.append(t["label"])
-                            except Exception as e:
-                                log(f"   Could not add ({t['label']}): {type(e).__name__}")
-                        album = (match.get("album") or {}).get("title") or "?"
-                        status = "Added" if done else "Already present"
-                        album_name, duration = album, match.get("duration")
-                        version = f" ({match['version']})" if match.get("version") else ""
-                        label = (f"{match['performer']['name']} - {match['title'].strip()}{version}"
-                                 f" [album: {album}] (id {match['id']})")
-                        if done:
-                            log_detail(f"   ADDED ({', '.join(done)}): {label}")
                         else:
-                            log_detail("   Already present everywhere")
-                if key not in seen and not confirming:
-                    seen.add(key)
-                    info = track_info(match, track)
-                    info["country"] = artist_country(
-                        (match or {}).get("performer", {}).get("name") or artist)
-                    plays = 0
-                    if history:
-                        try:
-                            plays = history.count_plays(artist, title)
-                        except Exception:
-                            pass
-                    details = info_line(info)
-                    heard = f"\nHeard {plays} time{'s' if plays > 1 else ''} before." if plays else "\nFirst time heard."
-                    short = info_line(info, with_label=False)
-                    suffix = f" ({short})" if short else ""
-                    if status == "Added":
-                        recap.append(f"+ {artist} - {title}{suffix}")
-                        notify(f"{artist} - {title}", f"Added to the playlists. Album: {album_name}"
-                               + (f"\n{details}" if details else "") + heard,
-                               tags=["musical_note"], click=track.get("url"))
-                    elif status == "Already present":
-                        recap.append(f"= {artist} - {title}{suffix}")
-                        notify(f"{artist} - {title}",
-                               f"Already in the playlists. Album: {album_name}"
-                               + (f"\n{details}" if details else "") + heard,
-                               tags=["repeat"], click=track.get("url"))
-                    else:
-                        recap.append(f"? {artist} - {title}{suffix}")
-                        notify(f"{artist} - {title}", "Not found on the service"
-                               + (", noted in Notion" if notion else "")
-                               + (f"\n{details}" if details else "") + heard,
-                               tags=["warning"], click=track.get("url"))
-                    if history:
-                        try:
-                            offset = float(out_first["matches"][0]["offset"])
-                        except (KeyError, IndexError, TypeError, ValueError):
-                            offset = 0
-                        song_start = first["sample_start"] - timedelta(seconds=max(0, offset))
-                        try:
-                            history.add_history(artist, title, song_start, status, album_name,
-                                                duration, track.get("url"), info)
-                            logged += 1
-                        except Exception as e:
-                            log(f"   Notion history failure ({type(e).__name__})")
+                            item = candidate
+                    if item is not None:
+                        seen.add(key)
+                        active = datetime.now(PARIS) >= detect_from
+                        kept = detector.on_track(item, active)
+                        if not kept and not detector.ended:
+                            log_detail(f"   Held back (music without speech): {artist} - {title}")
+                        for k in kept:
+                            keep(k)
                 if not confirming:
                     remaining = song_remaining(out, durations.get(key), sample_end)
                     if remaining is not None:
@@ -908,6 +973,8 @@ async def main():
                        f"Too many consecutive errors, stopping. Last one: {detail}",
                        tags=["rotating_light"], priority=5)
                 sys.exit(1)
+        if detector.ended:
+            break
         if confirming:
             wait = CYCLE_SECONDS - (time.time() - started)
         else:
@@ -915,6 +982,20 @@ async def main():
         wait = min(wait, (end - datetime.now(PARIS)).total_seconds())
         if wait > 0:
             await asyncio.sleep(wait)
+
+    ended_at = datetime.now(PARIS)
+    if detector.ended:
+        log(f"Show end detected at {ended_at:%H:%M} ({detector.streak} tracks in a row)")
+        notify("Show ended", f"show-ended {ended_at.isoformat(timespec='seconds')}",
+               tags=["show_end"], topic=SHOW_END_TOPIC or None)
+        if SHOW_END_TOPIC:   # the signal went to another topic: tell the user too
+            notify("Radio listening: show ended",
+                   f"End of the show detected at {ended_at:%H:%M} "
+                   f"({detector.streak} tracks in a row).", tags=["show_end"])
+    else:
+        log(f"No show end detected, stopped at the time limit ({ended_at:%H:%M})")
+        for item in detector.finish():
+            keep(item)
 
     log(f"Listening finished: {recognized} recognitions"
         + (f", {unconfirmed} not confirmed" if unconfirmed else ""))
@@ -930,6 +1011,9 @@ async def main():
         summary += f", {noted} missing from the service"
     if unconfirmed:
         summary += f", {unconfirmed} not confirmed"
+    if detector.ended:
+        summary += (f", show end detected at {ended_at:%H:%M} "
+                    f"({len(detector.dropped)} track(s) after the show ignored)")
     cleanup_daily(service, config, start)
     if captures_ok == 0:
         ping("fail")

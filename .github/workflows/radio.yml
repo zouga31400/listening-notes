@@ -14,7 +14,7 @@ concurrency:
 jobs:
   listen:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 360
     env:
       MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
       MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
@@ -25,6 +25,7 @@ jobs:
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
       STREAM_URL_BACKUP: ${{ secrets.STREAM_URL_BACKUP }}
       HEALTHCHECK_URL: ${{ secrets.HEALTHCHECK_URL }}
+      SHOW_END_TOPIC: ${{ secrets.SHOW_END_TOPIC }}
       TEST_MINUTES: ${{ github.event.inputs.minutes }}
       VERBOSE_LOGS: ${{ vars.VERBOSE_LOGS }}
     steps:
