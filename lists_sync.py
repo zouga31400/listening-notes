@@ -84,6 +84,12 @@ def notify(title, message, tags=(), priority=3, click=None):
 def notify_result(result, link=None):
     """Notification at the end of a playlist: what was added, removed, not found."""
     name = result["name"]
+    album = result.get("album")
+    if result.get("redirect") and album:
+        notify(f"Album found: {album['title']}",
+               f"No playlist created: this album has all {album['wanted']} songs of "
+               f"\"{name}\".", tags=["cd"], click=web_link("album", album["id"]) or link)
+        return
     action = ("created" if result.get("created") else
               "updated" if result.get("added") or result.get("removed") else "already up to date")
     lines = [f"{result.get('added', 0)} added, {result.get('already', 0)} already there, "
@@ -91,6 +97,9 @@ def notify_result(result, link=None):
     if result.get("missing"):
         lines.append("Not found: " + "; ".join(result["missing"][:10])
                      + (" ..." if len(result["missing"]) > 10 else ""))
+    if album:
+        lines.append(f"Album \"{album['title']}\": {album['covered']} of {album['wanted']} songs"
+                     + (f" - {web_link('album', album['id'])}" if web_link("album", album["id"]) else ""))
     tags = ["warning"] if result.get("missing") else ["white_check_mark"]
     notify(f"Playlist {action}: {name}", "\n".join(lines), tags=tags, click=link)
 
@@ -135,6 +144,33 @@ def read_list(path):
     """Returns (name, [(line number, artist, title)], [(line number, unreadable text)])."""
     with open(path, encoding="utf-8-sig", errors="replace") as f:
         return parse_lines(f.read().splitlines())
+
+
+# Optional lines right after the playlist name: the film or series the list comes from
+# ("Film: Titanic (1997)") and the author written in the playlist description
+# ("Author: Marie"; the default is playlist_author in config.txt).
+FILM_LINE = re.compile(r"^\s*(?:film|movie|series|s[ée]rie)\s*:\s*(.+?)\s*$", re.IGNORECASE)
+AUTHOR_LINE = re.compile(r"^\s*(?:author|auteur|by|par)\s*:\s*(.+?)\s*$", re.IGNORECASE)
+
+
+def split_meta(lines):
+    """(lines without the "Film:" / "Author:" lines, {"film": ..., "author": ...})."""
+    meta, kept = {"film": None, "author": None}, []
+    for line in lines:
+        for key, pattern in (("film", FILM_LINE), ("author", AUTHOR_LINE)):
+            m = pattern.match(line)
+            if m and meta[key] is None:
+                meta[key] = m.group(1)
+                break
+        else:
+            kept.append(line)
+    return kept, meta
+
+
+def split_film(lines):
+    """(lines without the "Film: ..." line, film name or None)."""
+    kept, meta = split_meta(lines)
+    return kept, meta["film"]
 
 
 def parse_lines(lines, name=None):
@@ -238,13 +274,16 @@ class MusicService:
                 return p
         return None
 
-    def create_playlist(self, name):
+    def create_playlist(self, name, description=None):
         data = self.call("POST", "/playlist/create", name=name,
-                         description="Created by lists_sync.py",
+                         description=description or description_for(),
                          is_public="0", is_collaborative="0")
         if "id" not in data:
             raise ServiceError("Playlist creation: unexpected response")
         return data["id"]
+
+    def set_description(self, playlist_id, description):
+        self.call("POST", "/playlist/update", playlist_id=playlist_id, description=description)
 
     def playlist_tracks(self, playlist_id):
         """Entries of the playlist, in order (each has 'id' and 'playlist_track_id')."""
@@ -281,14 +320,42 @@ class MusicService:
         return added
 
 
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.txt")
+DEFAULT_AUTHOR = "fsyl20"
+
+
+def config_value(key):
+    """One 'key = value' line of config.txt (lines starting with # are ignored)."""
+    try:
+        with open(CONFIG_FILE, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip().lower() == key:
+                        return v.strip()
+    except FileNotFoundError:
+        pass
+    return ""
+
+
+def description_for(author=None):
+    """Playlist description: "Created by <author>" (request's author, else config.txt)."""
+    author = " ".join((author or "").split())[:60] or config_value("playlist_author") or DEFAULT_AUTHOR
+    return f"Created by {author}"
+
+
 # Playlists created by this tool (current or older French description). Only these are
 # kept in sync with their list: tracks that are no longer chosen get removed.
 # "Created by lists_sync.py" (older playlists carry the previous script name, list_<name>.py).
 MANAGED_RE = re.compile(r"\b(?:lists_sync|list(?:e|es|s)?_\w+)\.py\b", re.IGNORECASE)
+# Current description: exactly "Created by <author>" on one short line.
+MANAGED_AUTHOR_RE = re.compile(r"^\s*Created by [^\n]{1,60}$")
 
 
 def is_managed(playlist):
-    return bool(MANAGED_RE.search((playlist or {}).get("description") or ""))
+    description = (playlist or {}).get("description") or ""
+    return bool(MANAGED_RE.search(description) or MANAGED_AUTHOR_RE.match(description))
 
 
 def label(track):
@@ -387,6 +454,66 @@ def best_match(service, artist, title):
     return None
 
 
+# ---------------------------------------------------------------- soundtrack albums
+
+SOUNDTRACK_RE = re.compile(r"soundtrack|motion picture|original score|bande originale|\bost\b|"
+                           r"music from|songs from|from the (?:film|movie|series)", re.IGNORECASE)
+
+
+def web_link(kind, item_id):
+    web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
+    return f"{web}/{kind}/{item_id}" if web and item_id else None
+
+
+def soundtrack_album(service, film, entries):
+    """Soundtrack album of the film that holds the most requested songs, or None.
+    Returns {id, title, artist, tracks_count, covered, wanted, missing}."""
+    film_n = norm(film)
+    if not film_n:
+        return None
+    wanted = list(dict.fromkeys((a, t) for _, a, t in entries))
+    seen, best = set(), None
+    for query in (f"{film} soundtrack", f"{film} original motion picture soundtrack", film):
+        data = service.call("GET", "/catalog/search", query=query, limit=10)
+        time.sleep(SEARCH_PAUSE)
+        for item in (data.get("albums") or {}).get("items", []):
+            album_id, title = item.get("id"), item.get("title") or ""
+            genre = ((item.get("genre") or {}).get("name") or "").lower()
+            if not album_id or album_id in seen or len(seen) >= 6:
+                continue
+            if item.get("streamable") is False or not contains(film_n, norm(title)):
+                continue
+            if not (SOUNDTRACK_RE.search(f"{title} {item.get('version') or ''}")
+                    or any(w in genre for w in ("soundtrack", "bande", "film"))):
+                continue
+            seen.add(album_id)
+            album = service.call("GET", "/album/get", album_id=album_id)
+            tracks = (album.get("tracks") or {}).get("items", [])
+            if not tracks:
+                continue
+            missing = [f"{a} - {t}" for a, t in wanted
+                       if not any(score(tr, norm(a), norm(t), t.lower()) is not None for tr in tracks)]
+            found = {"id": album_id, "title": title,
+                     "artist": ((album.get("artist") or item.get("artist") or {}).get("name") or ""),
+                     "tracks_count": len(tracks), "covered": len(wanted) - len(missing),
+                     "wanted": len(wanted), "missing": missing}
+            if best is None or (found["covered"], -found["tracks_count"]) > \
+                    (best["covered"], -best["tracks_count"]):
+                best = found
+    return best
+
+
+def album_holds_list(album):
+    """The album replaces the playlist: it has every requested song, and the songs are at
+    least half of the album (not mostly the score)."""
+    return (album["wanted"] > 0 and album["covered"] == album["wanted"]
+            and album["covered"] * 2 >= album["tracks_count"])
+
+
+def album_worth_mentioning(album):
+    return album["covered"] > 0 and album["covered"] * 2 >= album["wanted"]
+
+
 # ---------------------------------------------------------------- processing
 
 def summary(text):
@@ -398,14 +525,17 @@ def summary(text):
 
 def process(service, path):
     log(f"=== File: {path}")
-    name, entries, bad = read_list(path)
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
+        lines, meta = split_meta(f.read().splitlines())
+    name, entries, bad = parse_lines(lines)
     if not name:
         log("  Empty file: skipped.")
         return None
-    return build_playlist(service, name, entries, bad, f"File: `{path}`")
+    return build_playlist(service, name, entries, bad, f"File: `{path}`",
+                          film=meta["film"], author=meta["author"])
 
 
-def build_playlist(service, name, entries, bad, source):
+def build_playlist(service, name, entries, bad, source, film=None, author=None):
     """Creates, completes or syncs the playlist; returns the report as a dictionary.
 
     For a playlist created by this tool, the list is the reference: tracks that are
@@ -413,7 +543,8 @@ def build_playlist(service, name, entries, bad, source):
     Other playlists with the same name are only completed, never trimmed.
     """
     result = {"name": name, "added": 0, "already": 0, "removed": [], "missing": [],
-              "bad": bad, "tracks": [], "playlist_id": None, "created": False, "synced": False}
+              "bad": bad, "tracks": [], "playlist_id": None, "created": False, "synced": False,
+              "album": None, "redirect": False}
     log(f"  Playlist: {name}")
     for number, line in bad:
         log(f"  Line {number} unreadable (expected \"Artist - Title\"): {line}")
@@ -421,6 +552,25 @@ def build_playlist(service, name, entries, bad, source):
         log("  No readable track: nothing to do.")
         return result
 
+    soundtrack = None
+    if film:
+        try:
+            soundtrack = soundtrack_album(service, film, entries)
+        except ServiceError as e:
+            log(f"  Soundtrack album search failed ({e}): building the playlist.")
+        if soundtrack:
+            log(f"  Soundtrack album \"{soundtrack['title']}\": {soundtrack['covered']} of the "
+                f"{soundtrack['wanted']} songs, {soundtrack['tracks_count']} tracks in all.")
+        if soundtrack and album_holds_list(soundtrack):
+            log("  The album has every song of the list: no playlist created.")
+            result.update(album=soundtrack, redirect=True)
+            summary(f"### {name}\n\n- {source}\n- No playlist: album **{soundtrack['title']}** "
+                    f"has all {soundtrack['wanted']} songs.\n")
+            return result
+        if soundtrack and not album_worth_mentioning(soundtrack):
+            soundtrack = None
+
+    description = description_for(author)
     existing = service.find_playlist(name)
     managed = existing is None or is_managed(existing)
     if existing:
@@ -428,8 +578,14 @@ def build_playlist(service, name, entries, bad, source):
         current = service.playlist_tracks(playlist_id)
         mode = "syncing it with the list" if managed else "completing it (not created by this tool)"
         log(f"  Existing playlist: {mode} ({len(current)} tracks in it).")
+        if managed and (existing.get("description") or "").strip() != description:
+            try:
+                service.set_description(playlist_id, description)
+                log(f"  Description set to \"{description}\".")
+            except ServiceError as e:
+                log(f"  Description not updated: {e}")
     else:
-        playlist_id = service.create_playlist(name)
+        playlist_id = service.create_playlist(name, description)
         current = []
         log("  Playlist created (private).")
     present = {t["id"] for t in current}
@@ -505,7 +661,7 @@ def build_playlist(service, name, entries, bad, source):
     summary("\n".join(md) + "\n")
     result.update(added=added, already=already, removed=removed, missing=missing_lines,
                   tracks=rows, playlist_id=playlist_id, created=not existing,
-                  synced=bool(existing and managed))
+                  synced=bool(existing and managed), album=soundtrack)
     return result
 
 
@@ -545,7 +701,7 @@ def main(paths):
             continue
         try:
             result = process(service, path)
-            if result and result.get("playlist_id"):
+            if result and (result.get("playlist_id") or result.get("redirect")):
                 web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
                 notify_result(result, f"{web}/playlist/{result['playlist_id']}" if web else None)
         except ServiceError as e:

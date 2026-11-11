@@ -33,6 +33,9 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.t
 CONFIG_KEY = "notion_lists_db"
 STATUS_PROP = "Status"
 TODO, DONE, ERROR = "To create", "Created", "Error"
+ALBUM = "Album"   # status when an existing soundtrack album replaces the playlist
+FILM_PROP = "Film"
+AUTHOR_PROP = "Author"
 REPORT_HEADING = "Sync report"
 # Also recognizes reports written under the previous heading ("<name> report").
 REPORT_HEADING_RE = re.compile(r"\w+ report", re.IGNORECASE)
@@ -165,6 +168,15 @@ class Database:
                 "sorts": [{"timestamp": "created_time", "direction": "ascending"}]}
         return list(self.notion.paginate("POST", f"/databases/{self.id}/query", body))
 
+    def text_of(self, page, prop_name):
+        prop = (page.get("properties") or {}).get(prop_name) or {}
+        if self.props.get(prop_name) == "rich_text":
+            return plain(prop.get("rich_text")).strip()
+        return ""
+
+    def film_of(self, page):
+        return self.text_of(page, FILM_PROP)
+
     def title_of(self, page):
         prop = (page.get("properties") or {}).get(self.title_prop) or {}
         return plain(prop.get("title")).strip()
@@ -189,6 +201,21 @@ class Database:
         self.notion.call("PATCH", f"/pages/{page_id}", {"properties": props})
 
 
+def album_blocks(name, result, link):
+    album = result["album"]
+    blocks = [
+        text_block("paragraph",
+                   f"No playlist created: the album \"{album['title']}\""
+                   + (f" ({album['artist']})" if album["artist"] else "")
+                   + f" already has all {album['wanted']} songs of \"{name}\", and they make up "
+                     f"most of its {album['tracks_count']} tracks."),
+        *([text_block("paragraph", f"Album: {link}")] if link else []),
+        text_block("paragraph", "To get a playlist anyway, clear the Film property (and any "
+                                "\"Film:\" line), then set Status back to \"To create\"."),
+    ]
+    return blocks
+
+
 def report_blocks(name, result, bad, link):
     action = ("created" if result["created"] else
               "synced with the list" if result["synced"] else "completed")
@@ -201,8 +228,16 @@ def report_blocks(name, result, bad, link):
         text_block("paragraph", "To fix a track: correct or replace its line above (exact artist "
                                 "and title), then set Status back to \"To create\". Tracks no "
                                 "longer chosen are removed from the playlist."),
-        text_block("heading_3", "Tracks"),
     ]
+    album = result.get("album")
+    if album:
+        album_link = lq.web_link("album", album["id"])
+        text = (f"Soundtrack album \"{album['title']}\": {album['covered']} of the "
+                f"{album['wanted']} songs")
+        text += (", but most of its tracks are the score." if album["covered"] == album["wanted"]
+                 else f"; missing: {'; '.join(album['missing'][:10])}.")
+        blocks.append(text_block("paragraph", text + (f" {album_link}" if album_link else "")))
+    blocks.append(text_block("heading_3", "Tracks"))
     for row in result["tracks"]:
         if row["status"] == "not found":
             text = f"✗ {row['line']} — not found on the service"
@@ -226,6 +261,9 @@ def handle(db, service, page):
     page_id = page["id"]
     name = db.title_of(page) or None
     lines, old_report = page_content(db.notion, page_id)
+    lines, meta = lq.split_meta(lines)
+    film = db.film_of(page) or meta["film"]
+    author = db.text_of(page, AUTHOR_PROP) or meta["author"]
     name, entries, bad = lq.parse_lines(lines, name=name)
     lq.log(f"=== Notion page: {name or '(no name)'}")
     if not name or not entries:
@@ -234,7 +272,8 @@ def handle(db, service, page):
             "paragraph", "No readable track. Expected format: one \"Artist - Title\" line per track.")])
         return False
     try:
-        result = lq.build_playlist(service, name, entries, bad, "Source: Notion page")
+        result = lq.build_playlist(service, name, entries, bad, "Source: Notion page", film=film,
+                                   author=author)
     except lq.ServiceError as e:
         lq.log(f"  Error: {e}")
         db.finish(page_id, ERROR, old_report=old_report,
@@ -242,8 +281,13 @@ def handle(db, service, page):
         lq.notify_error(name, e, link=page.get("url"))
         return False
 
-    web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
-    link = f"{web}/playlist/{result['playlist_id']}" if web else None
+    if result.get("redirect"):
+        link = lq.web_link("album", result["album"]["id"])
+        db.finish(page_id, ALBUM, added=0, missing=0, link=link,
+                  blocks=album_blocks(name, result, link), old_report=old_report)
+        lq.notify_result(result, link=link or page.get("url"))
+        return True
+    link = lq.web_link("playlist", result["playlist_id"])
     db.finish(page_id, DONE, added=result["added"], missing=len(result["missing"]), link=link,
               blocks=report_blocks(name, result, bad, link), old_report=old_report)
     lq.notify_result(result, link=link or page.get("url"))
