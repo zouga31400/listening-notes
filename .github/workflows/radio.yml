@@ -30,6 +30,11 @@ jobs:
       VERBOSE_LOGS: ${{ vars.VERBOSE_LOGS }}
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: .github/workflows/radio.yml
       - name: Restore the cached ffmpeg
         uses: actions/cache@v4
         with:
@@ -54,6 +59,6 @@ jobs:
             sudo apt-get install -y -qq ffmpeg
           fi
           # Pinned versions: an untested upgrade cannot break an evening.
-          pip install -q shazamio==0.9.0 shazamio-core==2.0.0 requests
+          pip install -q shazamio==0.9.0 shazamio-core==2.0.0 requests librosa==0.11.0
       - name: Listen, recognize, add
         run: python radio_listen.py

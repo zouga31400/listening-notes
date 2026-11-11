@@ -412,6 +412,122 @@ def track_info(match, track):
             "quality": quality, "length": f"{seconds // 60}:{seconds % 60:02d}" if seconds else ""}
 
 
+DEEZER = "https://api.deezer.com"
+
+
+def deezer_track(isrc=None, artist="", title=""):
+    """The track on Deezer's public API (by ISRC, else by search), or None."""
+    try:
+        if isrc:
+            r = requests.get(f"{DEEZER}/track/isrc:{isrc}", timeout=8)
+            data = r.json() if r.ok else None
+            if data and not data.get("error"):
+                return data
+        if artist and title:
+            r = requests.get(f"{DEEZER}/search/track", timeout=8,
+                             params={"q": f'artist:"{main_artist(artist)}" track:"{search_title(title)}"',
+                                     "limit": 1})
+            hits = r.json().get("data", []) if r.ok else []
+            if hits:
+                r = requests.get(f"{DEEZER}/track/{hits[0]['id']}", timeout=8)
+                data = r.json() if r.ok else None
+                if data and not data.get("error"):
+                    return data
+    except Exception:
+        pass
+    return None
+
+
+def deezer_tempo(isrc=None, artist="", title=""):
+    """BPM given by Deezer; None when unknown (Deezer returns 0 for many tracks)."""
+    bpm = float((deezer_track(isrc, artist, title) or {}).get("bpm") or 0)
+    return round(bpm) if bpm > 0 else None
+
+
+def _clip(value, low, high):
+    return min(1.0, max(0.0, (value - low) / (high - low)))
+
+
+def audio_features(path):
+    """Tempo (BPM) and energy (0-100) measured on an audio file (librosa).
+    Energy mixes rhythmic intensity (onsets), loudness and brightness: a ballad scores
+    low even when its tempo is misread as double. None if the audio cannot be read."""
+    import numpy as np
+    import librosa
+    wav = path + ".wav"
+    try:
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", path, "-ac", "1",
+                        "-ar", "22050", "-t", "30", wav], check=True, timeout=60,
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+        y, sr = librosa.load(wav, sr=22050, mono=True)
+    except Exception:
+        return None
+    finally:
+        if os.path.exists(wav):
+            os.remove(wav)
+    if len(y) < sr * 5:
+        return None
+    onset = librosa.onset.onset_strength(y=y, sr=sr)
+    tempo = float(np.atleast_1d(librosa.feature.tempo(onset_envelope=onset, sr=sr))[0])
+    rms_db = float(np.mean(librosa.amplitude_to_db(librosa.feature.rms(y=y)[0] + 1e-9, ref=1.0)))
+    centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
+    energy = 100 * (0.45 * _clip(float(np.mean(onset)), 0.6, 2.2)
+                    + 0.35 * _clip(rms_db, -30, -8) + 0.20 * _clip(centroid, 1200, 3500))
+    return {"bpm": round(tempo), "energy": round(energy)}
+
+
+def preview_features(isrc=None, artist="", title="", fallback=None):
+    """Features of Deezer's 30-second preview, else of the fallback file (stream sample)."""
+    data = deezer_track(isrc, artist, title)
+    url = (data or {}).get("preview")
+    if url:
+        path = "preview.mp3"
+        try:
+            r = requests.get(url, timeout=15)
+            if r.ok and len(r.content) > 20000:
+                with open(path, "wb") as f:
+                    f.write(r.content)
+                feats = audio_features(path)
+                if feats:
+                    return feats
+        except Exception:
+            pass
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+    if fallback and os.path.exists(fallback):
+        return audio_features(fallback)
+    return None
+
+
+def mood_names(config):
+    names = [n.strip() for n in (config.get("mood_names") or "").split(",") if n.strip()]
+    return names if len(names) == 3 else ["Calme", "Groove", "Énergique"]
+
+
+def mood_of(features, config):
+    """Calm / groove / energetic, from the energy thresholds in config.txt."""
+    if not features:
+        return ""
+    calm, groove, energetic = mood_names(config)
+    low = int(config.get("calm_max_energy") or 33)
+    high = int(config.get("energetic_min_energy") or 66)
+    energy, bpm = features["energy"], features.get("bpm") or 0
+    if energy <= low or (bpm and bpm < 80 and energy < high):
+        return calm
+    if energy >= high:
+        return energetic
+    return groove
+
+
+def period_label(year):
+    """Broad period: before 1990, 1990-2009, 2010 and after."""
+    if not year:
+        return ""
+    return "60-80s" if year < 1990 else "90-2000s" if year < 2010 else "2010s+"
+
+
 def decade_label(year):
     """1983 -> "80s", 2004 -> "2000s"."""
     if not year:
@@ -421,18 +537,21 @@ def decade_label(year):
 
 
 def category_playlists(config, info):
-    """Names of the decade / genre playlists for a track, from the patterns in config.txt."""
-    decade = decade_label(info.get("year"))
-    genre = (info.get("genre") or "").strip()
+    """Names of the decade / genre / mood playlists for a track, from config.txt."""
+    values = {"{decade}": decade_label(info.get("year")), "{genre}": (info.get("genre") or "").strip(),
+              "{mood}": (info.get("mood") or "").strip(), "{period}": period_label(info.get("year"))}
     names = []
-    for key, needs in (("decade_playlist", ("{decade}",)), ("genre_playlist", ("{genre}",)),
-                       ("genre_decade_playlist", ("{genre}", "{decade}"))):
+    for key in ("decade_playlist", "genre_playlist", "genre_decade_playlist", "mood_playlist",
+                "mood_period_playlist"):
         pattern = (config.get(key) or "").strip()
         if not pattern:
             continue
-        if ("{decade}" in needs and not decade) or ("{genre}" in needs and not genre):
+        used = [k for k in values if k in pattern]
+        if any(not values[k] for k in used):
             continue
-        names.append(" ".join(pattern.replace("{decade}", decade).replace("{genre}", genre).split()))
+        for k in used:
+            pattern = pattern.replace(k, values[k])
+        names.append(" ".join(pattern.split()))
     return names
 
 
@@ -450,7 +569,7 @@ class Categories:
         playlist_id = self.existing.get(name.lower())
         if playlist_id is None:
             playlist_id = self.service.create_playlist(
-                name, "Tracks recognized automatically, sorted by decade and genre")
+                name, "Tracks recognized automatically, sorted by decade or mood")
             self.existing[name.lower()] = playlist_id
             self.present[playlist_id] = set()
             self.created += 1
@@ -467,6 +586,7 @@ class Categories:
 
 def info_line(info, with_label=True):
     parts = [str(info["year"]) if info.get("year") else "", info.get("genre", ""),
+             info.get("mood", ""), f"{info['bpm']} BPM" if info.get("bpm") and with_label else "",
              info.get("country", ""), info.get("label", "") if with_label else "",
              info.get("quality", ""), info.get("length", "") if with_label else ""]
     return " · ".join(p for p in parts if p)
@@ -528,6 +648,11 @@ class Notion:
             props["Shazam"] = {"url": shazam_url}
         if info.get("year"):
             props["Year"] = {"number": info["year"]}
+        for key, prop in (("bpm", "BPM"), ("energy", "Energy")):
+            if info.get(key) is not None:
+                props[prop] = {"number": info[key]}
+        if info.get("mood"):
+            props["Mood"] = {"select": {"name": info["mood"]}}
         for key, prop in (("genre", "Genre"), ("country", "Country"), ("label", "Label")):
             if info.get(key):
                 props[prop] = text_prop(info[key])
@@ -894,6 +1019,15 @@ async def main():
                        f" [album: {album_name}] (id {match['id']})")
         info = track_info(match, track)
         info["country"] = artist_country((match or {}).get("performer", {}).get("name") or artist)
+        try:
+            feats = preview_features((match or {}).get("isrc") or track.get("isrc"), artist, title,
+                                     fallback="sample.mp3" if item.get("current") else None)
+        except Exception as e:
+            log(f"   Audio analysis failed ({type(e).__name__})")
+            feats = None
+        if feats:
+            info.update(feats)
+            info["mood"] = mood_of(feats, config)
         if match is not None:
             for name in category_playlists(config, info):
                 try:
@@ -977,6 +1111,7 @@ async def main():
             if not track:
                 # Speech (or anything that is not a known track): held tracks belong to the show.
                 for item in detector.on_speech():
+                    item["current"] = False
                     keep(item)
             else:
                 recognized += 1
@@ -1005,6 +1140,7 @@ async def main():
                         else:
                             item = candidate
                     if item is not None:
+                        item["current"] = True      # sample.mp3 holds this very track
                         seen.add(key)
                         active = datetime.now(PARIS) >= detect_from
                         kept = detector.on_track(item, active)
@@ -1083,6 +1219,7 @@ async def main():
     else:
         log(f"No show end detected, stopped at the time limit ({ended_at:%H:%M})")
         for item in detector.finish():
+            item["current"] = False
             keep(item)
 
     log(f"Listening finished: {recognized} recognitions"
@@ -1157,7 +1294,8 @@ def classify_existing():
     categories = Categories(service, existing)
     tracks = service.playlist_tracks(main_id)
     log(f"{len(tracks)} tracks to sort")
-    skipped = 0
+    skipped = no_audio = 0
+    moods = {}
     for t in tracks:
         artist = (t.get("performer") or {}).get("name") or ""
         title = t.get("title") or ""
@@ -1169,6 +1307,13 @@ def classify_existing():
             best = None
         base = t if ((t.get("album") or {}).get("genre")) else (best or t)
         info = track_info(dict(base, _original_year=(best or {}).get("_original_year")), {})
+        feats = preview_features((t.get("isrc") or "").strip().upper() or None, artist, title)
+        if feats:
+            info.update(feats)
+            info["mood"] = mood_of(feats, config)
+            moods[info["mood"]] = moods.get(info["mood"], 0) + 1
+        else:
+            no_audio += 1
         names = category_playlists(config, info)
         if not names:
             skipped += 1
@@ -1179,13 +1324,88 @@ def classify_existing():
                 log(f"Could not add to a decade/genre playlist ({type(e).__name__})")
         time.sleep(0.3)
     log(f"Done: {categories.added} additions, {categories.created} playlists created, "
-        f"{skipped} tracks without year or genre")
+        f"{skipped} tracks without year or genre, {no_audio} without audio analysis")
+    log("Moods: " + ", ".join(f"{k} {v}" for k, v in moods.items()))
     notify("Radio listening: tracks sorted",
            f"{len(tracks)} tracks sorted: {categories.added} additions, "
-           f"{categories.created} decade/genre playlists created.", tags=["card_index_dividers"])
+           f"{categories.created} playlists created. Moods: "
+           + ", ".join(f"{k} {v}" for k, v in moods.items()) + ".", tags=["card_index_dividers"])
 
 
-if __name__ == "__main__" and "--classify" in sys.argv:
+def tempo_report():
+    """Measures tempo and energy on the tracks of the main playlist, to calibrate the
+    mood thresholds. Prints counts and percentiles only (the log is public)."""
+    check_secrets()
+    config = load_config()
+    service = MusicService()
+    service.login()
+    existing = {p["name"].strip().lower(): p["id"] for p in service.list_playlists()}
+    tracks = service.playlist_tracks(existing.get(config["main_playlist"].strip().lower()))
+    feats = []
+    for t in tracks:
+        f = preview_features((t.get("isrc") or "").strip().upper() or None,
+                             (t.get("performer") or {}).get("name") or "", t.get("title") or "")
+        if f:
+            feats.append(f)
+    log(f"{len(tracks)} tracks, {len(feats)} analyzed from a 30-second preview")
+    energies = sorted(f["energy"] for f in feats)
+    if energies:
+        pct = lambda q: energies[min(len(energies) - 1, int(q * len(energies)))]
+        log("Energy percentiles: " + ", ".join(f"p{int(q*100)}={pct(q)}"
+                                              for q in (0.1, 0.25, 0.33, 0.5, 0.66, 0.75, 0.9)))
+        for low in range(0, 100, 10):
+            n = sum(low <= e < low + 10 for e in energies)
+            log(f"   energy {low:>2}-{low + 9:>2}: {n:>3} {'#' * n}")
+    for low, high in ((0, 80), (80, 100), (100, 120), (120, 140), (140, 999)):
+        n = sum(low <= f["bpm"] < high for f in feats)
+        log(f"   {low:>3}-{high if high < 999 else '+':>3} BPM: {n:>3} {'#' * n}")
+    moods = {}
+    for f in feats:
+        m = mood_of(f, config)
+        moods[m] = moods.get(m, 0) + 1
+    log("Moods with the current thresholds: " + ", ".join(f"{k} {v}" for k, v in moods.items()))
+
+
+GENRE_DECADE_DESCRIPTION = "Tracks recognized automatically, sorted by decade and genre"
+
+
+def genre_decade_playlists(playlists):
+    """The "<prefix> <genre> <decade>" playlists created by this script (not the decade-only
+    ones such as "Radio 80s", and never a playlist created by hand)."""
+    regex = re.compile(r"^\S+ (.+) (?:\d0s|\d{4}s)$")
+    out = []
+    for p in playlists:
+        if (p.get("description") or "").strip() != GENRE_DECADE_DESCRIPTION:
+            continue
+        if regex.match((p.get("name") or "").strip()):
+            out.append(p)
+    return out
+
+
+def remove_genre_decade():
+    check_secrets()
+    service = MusicService()
+    service.login()
+    old = genre_decade_playlists(service.list_playlists())
+    log(f"{len(old)} genre/decade playlists to delete")
+    deleted = 0
+    for p in old:
+        try:
+            service.call("POST", "/playlist/delete", playlist_id=p["id"])
+            deleted += 1
+        except Exception as e:
+            log(f"Could not delete a playlist ({type(e).__name__})")
+        time.sleep(0.2)
+    log(f"{deleted} genre/decade playlists deleted")
+    notify("Radio listening: playlists cleaned", f"{deleted} genre/decade playlists deleted.",
+           tags=["wastebasket"])
+
+
+if __name__ == "__main__" and "--remove-genre-decade" in sys.argv:
+    remove_genre_decade()
+elif __name__ == "__main__" and "--tempo-report" in sys.argv:
+    tempo_report()
+elif __name__ == "__main__" and "--classify" in sys.argv:
     classify_existing()
 elif __name__ == "__main__":
     try:

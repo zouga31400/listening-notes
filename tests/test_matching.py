@@ -138,6 +138,38 @@ class DecadeGenre(unittest.TestCase):
         self.assertEqual(r.track_info(best, {})["year"], 1984)
 
 
+class Moods(unittest.TestCase):
+    CONFIG = {"calm_max_energy": "33", "energetic_min_energy": "66",
+              "mood_names": "Calme, Groove, Énergique", "decade_playlist": "Radio {decade}",
+              "genre_decade_playlist": "", "mood_period_playlist": "Radio {mood} {period}"}
+
+    def test_mood_from_energy_and_tempo(self):
+        m = lambda e, b: r.mood_of({"energy": e, "bpm": b}, self.CONFIG)
+        self.assertEqual(m(20, 120), "Calme")
+        self.assertEqual(m(50, 72), "Calme")        # slow and not intense: a ballad
+        self.assertEqual(m(50, 110), "Groove")
+        self.assertEqual(m(80, 72), "Énergique")    # loud and dense even if slow
+        self.assertEqual(r.mood_of(None, self.CONFIG), "")
+
+    def test_periods_and_names(self):
+        self.assertEqual([r.period_label(y) for y in (1975, 1989, 1990, 2009, 2010, None)],
+                         ["60-80s", "60-80s", "90-2000s", "90-2000s", "2010s+", ""])
+        info = {"year": 1984, "genre": "Rock", "mood": "Calme"}
+        self.assertEqual(r.category_playlists(self.CONFIG, info), ["Radio 80s", "Radio Calme 60-80s"])
+        self.assertEqual(r.category_playlists(self.CONFIG, {"year": 1984}), ["Radio 80s"])
+
+    def test_only_genre_decade_playlists_are_removed(self):
+        d = r.GENRE_DECADE_DESCRIPTION
+        playlists = [{"name": "Radio Rock 80s", "description": d},
+                     {"name": "Radio Pop/Rock 2000s", "description": d},
+                     {"name": "Radio 80s", "description": d},                 # decade only: kept
+                     {"name": "Radio Calme 60-80s", "description": "x"},      # mood: kept
+                     {"name": "Rock 80s", "description": "my own"},           # by hand: kept
+                     {"name": "Radio Shazam", "description": ""}]
+        self.assertEqual([p["name"] for p in r.genre_decade_playlists(playlists)],
+                         ["Radio Rock 80s", "Radio Pop/Rock 2000s"])
+
+
 class ShowEnd(unittest.TestCase):
     def test_run_of_three_ends_the_show_and_keeps_the_first(self):
         d = r.EndDetector(3)
