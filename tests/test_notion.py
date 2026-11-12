@@ -79,7 +79,7 @@ class NotionWrites(unittest.TestCase):
         self.assertNotIn("Album", props)   # not a property of this database: left out
         self.assertNotIn("Genre", props)
         self.assertEqual(body["cover"]["external"]["url"], "https://img/c.jpg")
-        self.assertEqual(body["icon"]["external"]["url"], "https://img/c.jpg")
+        self.assertNotIn("icon", body)
         self.assertEqual(props["Cover"]["files"][0]["external"]["url"], "https://img/c.jpg")
 
     def test_missing_page_has_youtube_and_details(self):

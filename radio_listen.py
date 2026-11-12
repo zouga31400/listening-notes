@@ -727,7 +727,6 @@ class Notion:
         body = {"parent": {"database_id": self.database_id}, "properties": props}
         if cover:
             body["cover"] = {"type": "external", "external": {"url": cover}}
-            body["icon"] = {"type": "external", "external": {"url": cover}}
         r = requests.post(f"{NOTION_API}/pages", headers=self.headers, timeout=20, json=body)
         r.raise_for_status()
 

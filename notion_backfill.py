@@ -1,5 +1,5 @@
 """Completes the pages already in the Notion history database (run once by hand):
-album cover (page cover and icon), link to the track on the service, YouTube link,
+album cover (page cover; page icons are removed), link to the track on the service, YouTube link,
 year, genre and decade. Pages that already have a link and a cover are left as they are.
 
 Secrets: NOTION_TOKEN, MUSIC_EMAIL, MUSIC_PASSWORD, MUSIC_API_URL, MUSIC_APP_ID,
@@ -77,9 +77,10 @@ def backfill(db, service, counts):
             cover = ((page["cover"].get("external") or {}).get("url")) or ""
         if cover and not has_cover:
             body["cover"] = {"type": "external", "external": {"url": cover}}
-            body["icon"] = {"type": "external", "external": {"url": cover}}
             if "Cover" in db.properties:
                 body.setdefault("properties", {})["Cover"] = r.cover_prop(cover)
+        if page.get("icon"):  # no icon next to the title in lists: the cover is enough
+            body["icon"] = None
         if not body:
             continue
         resp = requests.patch(f"{r.NOTION_API}/pages/{page['id']}", json=body,
