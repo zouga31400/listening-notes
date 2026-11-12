@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "sort = sort the tracks; tempo-report = measure tempo and energy only; remove-genre-decade = delete the genre/decade playlists"
+        description: "sort = sort the tracks; tempo-report = measure tempo and energy only; remove-genre-decade = delete the genre/decade playlists; remove-marked = remove the tracks marked Remove in the Notion history"
         default: "sort"
 
 concurrency:
@@ -23,6 +23,7 @@ jobs:
       MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
       STREAM_URL: ${{ secrets.STREAM_URL }}
       NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
@@ -53,5 +54,6 @@ jobs:
           case "$MODE" in
             tempo-report) python radio_listen.py --tempo-report ;;
             remove-genre-decade) python radio_listen.py --remove-genre-decade ;;
+            remove-marked) python radio_listen.py --remove-marked ;;
             *) python radio_listen.py --classify ;;
           esac

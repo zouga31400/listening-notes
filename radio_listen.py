@@ -1571,7 +1571,73 @@ def remove_genre_decade():
            tags=["wastebasket"])
 
 
-if __name__ == "__main__" and "--remove-genre-decade" in sys.argv:
+REMOVE_STATUS = "Remove"
+
+
+def same_track(item, artist, title):
+    """Is this playlist entry the track artist - title (any version of it)?"""
+    performer = norm((item.get("performer") or {}).get("name") or "")
+    return (norm(item.get("title") or "") == norm(title) and bool(performer)
+            and (performer == norm(artist) or contains(norm(artist), performer)
+                 or contains(performer, norm(artist))))
+
+
+def remove_marked():
+    """Removes from the radio playlists the tracks whose history row has the Status
+    "Remove" in Notion, then deletes those rows. Track names are never logged."""
+    check_secrets()
+    config = load_config()
+    if not (NOTION_TOKEN and config.get("notion_history_db")):
+        raise SystemExit("NOTION_TOKEN secret or notion_history_db missing")
+    db = Notion(NOTION_TOKEN, config["notion_history_db"])
+    r = requests.post(f"{NOTION_API}/databases/{db.database_id}/query", headers=db.headers,
+                      timeout=20, json={"page_size": 100, "filter": {
+                          "property": "Status", "select": {"equals": REMOVE_STATUS}}})
+    r.raise_for_status()
+    rows = []
+    for page in r.json().get("results", []):
+        props = page.get("properties", {})
+        title = "".join(t.get("plain_text", "") for t in props.get("Title", {}).get("title", []))
+        artist = "".join(t.get("plain_text", "")
+                         for t in props.get("Artist", {}).get("rich_text", []))
+        if title:
+            rows.append((page["id"], artist, title))
+    log(f"{len(rows)} track(s) marked to remove")
+    if not rows:
+        return
+    service = MusicService()
+    service.login()
+    playlists = [p for p in service.list_playlists()
+                 if (p.get("name") or "").strip().lower().startswith("radio ")]
+    removed = 0
+    for p in playlists:
+        try:
+            items = service.playlist_tracks(p["id"])
+        except Exception as e:
+            log(f"Could not read a playlist ({type(e).__name__})")
+            continue
+        ids = [i["playlist_track_id"] for i in items if i.get("playlist_track_id")
+               and any(same_track(i, a, t) for _, a, t in rows)]
+        if ids:
+            try:
+                service.call("POST", "/playlist/deleteTracks", playlist_id=p["id"],
+                             playlist_track_ids=",".join(str(x) for x in ids))
+                removed += len(ids)
+            except Exception as e:
+                log(f"Could not remove from a playlist ({type(e).__name__})")
+        time.sleep(0.2)
+    for page_id, _, _ in rows:
+        requests.patch(f"{NOTION_API}/pages/{page_id}", headers=db.headers, timeout=20,
+                       json={"archived": True}).raise_for_status()
+    log(f"{removed} playlist entries removed, {len(rows)} history row(s) deleted")
+    notify("Radio listening: tracks removed",
+           f"{len(rows)} track(s) removed: {removed} playlist entries, history rows deleted.",
+           tags=["wastebasket"])
+
+
+if __name__ == "__main__" and "--remove-marked" in sys.argv:
+    remove_marked()
+elif __name__ == "__main__" and "--remove-genre-decade" in sys.argv:
     remove_genre_decade()
 elif __name__ == "__main__" and "--tempo-report" in sys.argv:
     tempo_report()

@@ -243,6 +243,17 @@ class ShowEnd(unittest.TestCase):
         self.assertIsNone(r.gap_between(None, nxt))
 
 
+class RemoveMarked(unittest.TestCase):
+    def test_same_track(self):
+        item = {"title": "Heatseeker", "performer": {"name": "AC/DC"}}
+        self.assertTrue(r.same_track(item, "AC/DC", "Heatseeker"))
+        self.assertTrue(r.same_track({"title": "Heatseeker (Remastered)", "performer": {"name": "AC/DC"}},
+                                     "AC/DC", "Heatseeker"))
+        self.assertFalse(r.same_track(item, "AC/DC", "Thunderstruck"))
+        self.assertFalse(r.same_track({"title": "Heatseeker", "performer": {"name": "Other"}},
+                                      "AC/DC", "Heatseeker"))
+
+
 class Housekeeping(unittest.TestCase):
     def test_only_old_daily_playlists_are_deleted(self):
         playlists = [{"name": "Radio 2026-09-01", "id": 1}, {"name": "Radio 2026-10-11", "id": 2},
