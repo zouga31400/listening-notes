@@ -1,0 +1,29 @@
+name: Notion backfill
+# Started by hand: completes the pages already in the Notion history and missing-track
+# databases (album cover, link to the service, YouTube link, year, genre, decade).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      MUSIC_EMAIL: ${{ secrets.MUSIC_EMAIL }}
+      MUSIC_PASSWORD: ${{ secrets.MUSIC_PASSWORD }}
+      MUSIC_API_URL: ${{ secrets.MUSIC_API_URL }}
+      MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
+      MUSIC_WEB_URL: ${{ secrets.MUSIC_WEB_URL }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the tools
+        run: pip install -q requests
+      - name: Complete the Notion pages
+        run: python notion_backfill.py
