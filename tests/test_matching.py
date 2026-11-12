@@ -5,7 +5,7 @@ import os
 import sys
 import types
 import unittest
-from datetime import date
+from datetime import date, datetime
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.modules.setdefault("shazamio", types.SimpleNamespace(Shazam=None))
@@ -187,20 +187,29 @@ class Moods(unittest.TestCase):
 
 
 class ShowEnd(unittest.TestCase):
-    def test_run_of_three_ends_the_show_and_keeps_the_first(self):
+    def test_run_of_three_ends_the_show_before_the_run(self):
         d = r.EndDetector(3)
-        self.assertEqual(d.on_track("A", True), ["A"])   # after speech: first of the run
+        self.assertEqual(d.on_track("A", True), [])      # after speech: held too
         self.assertEqual(d.on_track("B", True), [])      # back to back: held
         self.assertEqual(d.on_track("C", True), [])      # third in a row: end
         self.assertTrue(d.ended)
-        self.assertEqual(d.dropped, ["B", "C"])
+        self.assertEqual(d.dropped, ["A", "B", "C"])     # the show ended before A
+
+    def test_announcement_after_the_last_track(self):
+        d = r.EndDetector(3)
+        self.assertEqual(d.on_track("Last", True), [])
+        self.assertEqual(d.on_speech(), ["Last"])        # short end-of-show announcement
+        for x in "ABC":
+            d.on_track(x, True)
+        self.assertTrue(d.ended)
+        self.assertEqual(d.dropped, ["A", "B", "C"])
 
     def test_speech_releases_held_tracks(self):
         d = r.EndDetector(3)
         d.on_track("A", True)
         self.assertEqual(d.on_track("B", True), [])
-        self.assertEqual(d.on_speech(), ["B"])           # host speaks again: B was in the show
-        self.assertEqual(d.on_track("C", True), ["C"])
+        self.assertEqual(d.on_speech(), ["A", "B"])      # host speaks again: A and B were in the show
+        self.assertEqual(d.on_track("C", True), [])
         self.assertFalse(d.ended)
 
     def test_inactive_before_midnight(self):
@@ -214,11 +223,24 @@ class ShowEnd(unittest.TestCase):
         self.assertEqual(d.on_track("B", True), [])       # 00:02, held
         d.on_track("C", True)                             # 00:06, end
         self.assertTrue(d.ended)
+        self.assertEqual(d.dropped, ["B", "C"])
 
     def test_held_tracks_kept_at_time_limit(self):
         d = r.EndDetector(4)
         d.on_track("A", True); d.on_track("B", True)
-        self.assertEqual(d.finish(), ["B"])
+        self.assertEqual(d.finish(), ["A", "B"])
+
+    def test_song_bounds_and_gap(self):
+        t = datetime(2026, 11, 12, 1, 40, 30, tzinfo=r.PARIS)
+        out = {"matches": [{"offset": 30.0}]}
+        start, end = r.song_bounds(out, 230, t)
+        self.assertEqual(start, datetime(2026, 11, 12, 1, 40, 0, tzinfo=r.PARIS))
+        self.assertEqual(end, datetime(2026, 11, 12, 1, 43, 50, tzinfo=r.PARIS))
+        self.assertEqual(r.song_bounds(out, None, t)[1], None)
+        self.assertEqual(r.song_bounds({}, 230, t), (None, None))
+        nxt = datetime(2026, 11, 12, 1, 44, 2, tzinfo=r.PARIS)
+        self.assertEqual(r.gap_between(end, nxt), 12)    # a 12 s announcement: speech
+        self.assertIsNone(r.gap_between(None, nxt))
 
 
 class Housekeeping(unittest.TestCase):

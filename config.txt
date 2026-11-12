@@ -47,8 +47,10 @@ listen_start = 21:00
 
 # End of the show. The show ends at a different time every night: after
 # end_detection_from, when end_streak tracks are played in a row without speech,
-# the show is considered over. The first track of that run is kept, the next ones
-# are ignored, listening stops and a "show ended" signal is sent through ntfy.
+# the show is considered over just before that run: all its tracks are ignored,
+# listening stops and a "show ended" signal is sent through ntfy. A short
+# announcement between two tracks counts as speech. After end_detection_from, a
+# track is added (and notified) once speech is heard after it.
 # Listening stops at latest_end in any case (the job is limited to 6 hours).
 end_detection_from = 00:00
 end_streak = 3
