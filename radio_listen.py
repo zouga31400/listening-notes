@@ -45,7 +45,8 @@ SKIP_AFTER_MATCH = 75
 MAX_SKIP = 300
 STREAM_RETRY_SECONDS = 15
 BOX_SET_TRACKS = 30        # albums with more tracks are treated as box sets/compilations
-NEXT_SONG_MARGIN = 10
+NEXT_SONG_MARGIN = 4         # listen again this many seconds after a song's estimated end
+SPEECH_GAP_SECONDS = 6       # a longer silence between two songs means speech was missed
 PARIS = ZoneInfo("Europe/Paris")
 BAD_WORDS = re.compile(r"\b(live|karaoke|tribute|cover|instrumental|demo|remix|acoustic"
                        r"|refix|rework|mix|dub|edit)\b")
@@ -907,11 +908,11 @@ def old_daily_playlists(playlists, pattern, keep_days, today):
 
 
 class EndDetector:
-    """Detects the end of the show: after end_detection_from, a run of `streak` tracks
-    played back to back (no speech between them) means the show is over and the station
-    is playing music only. The first track of the run belongs to the show and is kept;
-    the following ones are held back, then dropped if the run reaches `streak`, or kept
-    if the host speaks again."""
+    """Detects the end of the show: after end_detection_from, a run of `streak` different
+    tracks played back to back (no speech between them) means the show is over and the
+    station is playing music only. The show ended just before that run: every track of
+    the run is held back, then dropped when the run reaches `streak`, or kept as soon as
+    speech is heard again (the host, or a jingle/announcement between two tracks)."""
 
     def __init__(self, streak):
         self.streak = max(2, streak)
@@ -930,11 +931,8 @@ class EndDetector:
 
     def on_track(self, item, active):
         """A new confirmed track. Returns the tracks to keep now."""
-        if self.speech:
-            self.speech = False
-            self.run = 1
-            return [item]
-        self.run += 1
+        self.run = 1 if self.speech else self.run + 1
+        self.speech = False
         if not active:
             return [item]
         self.held.append(item)
@@ -947,6 +945,28 @@ class EndDetector:
         """At the hard end: held tracks are kept (the run was not long enough)."""
         held, self.held = self.held, []
         return held
+
+
+def song_bounds(out, duration, sample_start):
+    """(start, end) of the song in the stream, from Shazam's offset and the song length.
+    end is None when the length is unknown; both are None without an offset."""
+    try:
+        offset = float(out["matches"][0]["offset"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None, None
+    start = sample_start - timedelta(seconds=max(0.0, offset))
+    try:
+        length = float(duration)
+    except (TypeError, ValueError):
+        length = 0
+    return start, (start + timedelta(seconds=length)) if length > 0 else None
+
+
+def gap_between(previous_end, next_start):
+    """Seconds between the end of a song and the start of the next one (None if unknown)."""
+    if previous_end is None or next_start is None:
+        return None
+    return (next_start - previous_end).total_seconds()
 
 
 EARLY_START_MINUTES = 45   # a scheduled run may start up to this long before listen_start
@@ -1095,6 +1115,7 @@ async def main():
     captures_ok = stream_errors = 0
     outage_start = 0.0
     on_backup = False
+    last_song_end = None    # estimated end of the last confirmed song
     pending = None      # first sighting of a track waiting for confirmation
     recap = []          # "symbol Artist - Title" lines for the end-of-session notification
 
@@ -1272,6 +1293,17 @@ async def main():
                     if item is not None:
                         item["current"] = True      # sample.mp3 holds this very track
                         seen.add(key)
+                        song_start, song_end = song_bounds(item["out"], durations.get(key),
+                                                           item["sample_start"])
+                        gap = gap_between(last_song_end, song_start)
+                        if gap is not None and gap >= SPEECH_GAP_SECONDS and not detector.speech:
+                            # Something that is not music (e.g. a short announcement) was
+                            # played between the two songs, even if no sample caught it.
+                            log_detail(f"   {int(gap)} s between the two songs: counted as speech")
+                            for k in detector.on_speech():
+                                k["current"] = False
+                                keep(k)
+                        last_song_end = song_end
                         active = datetime.now(PARIS) >= detect_from
                         kept = detector.on_track(item, active)
                         if not kept and not detector.ended:
@@ -1330,7 +1362,7 @@ async def main():
 
     ended_at = datetime.now(PARIS)
     if detector.ended:
-        # The show really ended when the first ignored track started.
+        # The show ended when the first track of the run started.
         first = detector.dropped[0] if detector.dropped else None
         try:
             offset = float(first["out"]["matches"][0]["offset"])
