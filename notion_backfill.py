@@ -43,7 +43,7 @@ def backfill(db, service, counts):
             continue
         year = (props.get("Year") or {}).get("number")
         has_link = bool((props.get("Link") or {}).get("url"))
-        has_cover = bool(page.get("cover"))
+        has_cover = bool(page.get("cover")) and bool((props.get("Cover") or {}).get("files"))
         update, cover = {}, ""
 
         if service and not (has_link and has_cover):
@@ -73,9 +73,13 @@ def backfill(db, service, counts):
         body = {}
         if update:
             body["properties"] = update
+        if not cover and page.get("cover"):  # cover set on an earlier run
+            cover = ((page["cover"].get("external") or {}).get("url")) or ""
         if cover and not has_cover:
             body["cover"] = {"type": "external", "external": {"url": cover}}
             body["icon"] = {"type": "external", "external": {"url": cover}}
+            if "Cover" in db.properties:
+                body.setdefault("properties", {})["Cover"] = r.cover_prop(cover)
         if not body:
             continue
         resp = requests.patch(f"{r.NOTION_API}/pages/{page['id']}", json=body,

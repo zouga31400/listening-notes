@@ -52,7 +52,7 @@ class NotionWrites(unittest.TestCase):
              mock.patch.object(r.requests, "patch",
                                side_effect=lambda url, **k: sent.update(k["json"]) or Response()):
             self.db.check(r.HISTORY_PROPERTIES)
-        self.assertEqual(set(sent["properties"]), {"Link", "YouTube"})
+        self.assertEqual(set(sent["properties"]), {"Link", "YouTube", "Cover"})
         self.assertIn("Link", self.db.properties)
 
     def test_check_survives_refused_schema_change(self):
@@ -64,7 +64,7 @@ class NotionWrites(unittest.TestCase):
 
     def test_history_page_has_cover_decade_links(self):
         self.db.properties = {"Title", "Artist", "Played at", "Status", "Year", "Decade",
-                              "Link", "YouTube"}
+                              "Link", "YouTube", "Cover"}
         bodies = []
         with mock.patch.object(r.requests, "post",
                                side_effect=lambda url, **k: bodies.append(k["json"]) or Response()):
@@ -80,6 +80,7 @@ class NotionWrites(unittest.TestCase):
         self.assertNotIn("Genre", props)
         self.assertEqual(body["cover"]["external"]["url"], "https://img/c.jpg")
         self.assertEqual(body["icon"]["external"]["url"], "https://img/c.jpg")
+        self.assertEqual(props["Cover"]["files"][0]["external"]["url"], "https://img/c.jpg")
 
     def test_missing_page_has_youtube_and_details(self):
         self.db.properties = set(r.MISSING_PROPERTIES) | {"Title", "Artist", "Date", "Shazam"}

@@ -678,9 +678,16 @@ def youtube_link(artist, title):
 
 # Properties added to the Notion databases when missing (the integration needs the
 # right to edit the database; otherwise these values are simply left out).
-HISTORY_PROPERTIES = {"Decade": {"select": {}}, "Link": {"url": {}}, "YouTube": {"url": {}}}
+HISTORY_PROPERTIES = {"Decade": {"select": {}}, "Link": {"url": {}}, "YouTube": {"url": {}},
+                      "Cover": {"files": {}}}
 MISSING_PROPERTIES = {"YouTube": {"url": {}}, "Album": {"rich_text": {}},
-                      "Year": {"number": {}}, "Decade": {"select": {}}, "Genre": {"rich_text": {}}}
+                      "Year": {"number": {}}, "Decade": {"select": {}}, "Genre": {"rich_text": {}},
+                      "Cover": {"files": {}}}
+
+
+def cover_prop(url):
+    """Files property holding the album cover (shown on gallery cards)."""
+    return {"files": [{"name": "cover", "type": "external", "external": {"url": url}}]}
 
 
 def text_prop(value):
@@ -715,6 +722,8 @@ class Notion:
         known = getattr(self, "properties", None)
         if known:  # never send a property the database does not have (Notion rejects it)
             props = {k: v for k, v in props.items() if k in known}
+        if cover and (not known or "Cover" in known):
+            props["Cover"] = cover_prop(cover)
         body = {"parent": {"database_id": self.database_id}, "properties": props}
         if cover:
             body["cover"] = {"type": "external", "external": {"url": cover}}
