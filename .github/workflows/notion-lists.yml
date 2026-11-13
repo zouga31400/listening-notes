@@ -33,26 +33,32 @@ jobs:
         id: count
         run: python notion_lists.py --count
       - name: Delete earlier runs that had nothing to do
-        # Keeps the Actions page readable: removes the runs of the last 2 hours whose
-        # processing job was skipped, and the runs GitHub cancelled while one was queued.
-        # Runs that processed pages, and failed runs, are kept.
+        # Keeps the Actions page readable. Removes:
+        # - runs of the last 2 hours whose processing job was skipped (nothing to do);
+        # - runs of the last 7 days GitHub cancelled while one was queued, or that never
+        #   started (startup_failure, e.g. during a GitHub incident).
+        # Runs that processed pages, and runs that failed while working, are kept.
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          since=$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)
-          gh api -X GET "repos/$REPO/actions/workflows/notion-lists.yml/runs" \
-            -f status=completed -f per_page=100 -f created=">$since" --jq '.workflow_runs[] | "\(.id) \(.conclusion)"' | while read -r id conclusion; do
+          recent=$(date -u -d '-2 hours' +%Y-%m-%dT%H:%M:%SZ)
+          since=$(date -u -d '-7 days' +%Y-%m-%dT%H:%M:%SZ)
+          gh api -X GET --paginate "repos/$REPO/actions/workflows/notion-lists.yml/runs" \
+            -f status=completed -f per_page=100 -f created=">$since" \
+            --jq '.workflow_runs[] | "\(.id) \(.conclusion) \(.created_at)"' | while read -r id conclusion created; do
             [ "$id" = "$GITHUB_RUN_ID" ] && continue
             delete=no
-            if [ "$conclusion" = "cancelled" ]; then
-              delete=yes
-            elif [ "$conclusion" = "success" ]; then
-              skipped=$(gh api "repos/$REPO/actions/runs/$id/jobs" \
-                --jq '[.jobs[] | select(.name == "process" and .conclusion == "skipped")] | length')
-              [ "$skipped" = "1" ] && delete=yes
-            fi
+            case "$conclusion" in
+              cancelled|startup_failure) delete=yes ;;
+              success)
+                if [[ "$created" > "$recent" ]]; then
+                  skipped=$(gh api "repos/$REPO/actions/runs/$id/jobs" \
+                    --jq '[.jobs[] | select(.name == "process" and .conclusion == "skipped")] | length')
+                  [ "$skipped" = "1" ] && delete=yes
+                fi ;;
+            esac
             if [ "$delete" = "yes" ]; then
               gh api -X DELETE "repos/$REPO/actions/runs/$id" >/dev/null && echo "Deleted run $id ($conclusion)"
             fi
