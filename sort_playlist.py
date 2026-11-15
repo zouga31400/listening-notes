@@ -275,7 +275,7 @@ def main():
     pattern = config.get("sort_playlist_name") or "{playlist} {mood} {period}"
     wanted = os.environ.get("PLAYLISTS", "").strip()
     notion = None
-    if wanted:
+    if wanted and wanted != "*":
         rows = [(None, n.strip()) for n in wanted.split(",") if n.strip()]
         log(f"{len(rows)} playlists from the workflow input")
     else:
