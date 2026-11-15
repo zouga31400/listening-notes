@@ -4,14 +4,17 @@ name: Sort a playlist by mood and period
 # Schedule: set per row in the "Playlists to sort" Notion database (notion_sort_db):
 # Frequency, Day and Hour (Paris time). GitHub checks every hour; the sorting job only
 # runs when a row is due, and the checks that had nothing to do are removed from the
-# history. By hand: the playlists typed in the input, or every ticked row if empty.
+# history. GitHub's schedule is unreliable, so an external service also calls the
+# workflow_dispatch API every hour with an empty input, which does the same check.
+# By hand: the playlists typed in the input, "*" for every ticked row, or empty to
+# sort only the rows that are due.
 on:
   schedule:
     - cron: "7 * * * *"
   workflow_dispatch:
     inputs:
       playlists:
-        description: "Playlists to sort (comma-separated; empty = every ticked row of the Notion database)"
+        description: "Playlists to sort (comma-separated; * = every ticked row of the Notion database; empty = only the rows due)"
         default: ""
 
 concurrency:
@@ -30,15 +33,17 @@ jobs:
       due: ${{ steps.count.outputs.due }}
     env:
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+      # Scheduled run, or dispatch with an empty input: only the rows that are due.
+      AUTO: ${{ (github.event_name == 'schedule' || github.event.inputs.playlists == '') && '1' || '' }}
     steps:
       - uses: actions/checkout@v5
       - name: Install requests
-        if: github.event_name == 'schedule'
+        if: env.AUTO == '1'
         run: pip install -q requests
       - name: Count the playlists due
         id: count
         run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then python sort_playlist.py --due
+          if [ "$AUTO" = "1" ]; then python sort_playlist.py --due
           else echo "due=1" >> "$GITHUB_OUTPUT"; fi
       - name: Delete earlier checks that had nothing to do
         # Same as the Notion lists workflow: removes the runs of the last 2 hours whose
@@ -80,7 +85,7 @@ jobs:
       MUSIC_APP_ID: ${{ secrets.MUSIC_APP_ID }}
       NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
       PLAYLISTS: ${{ github.event.inputs.playlists }}
-      SCHEDULED: ${{ github.event_name == 'schedule' && '1' || '' }}
+      SCHEDULED: ${{ (github.event_name == 'schedule' || github.event.inputs.playlists == '') && '1' || '' }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
