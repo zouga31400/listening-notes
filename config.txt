@@ -102,4 +102,10 @@ notion_lists_db = ea8e66660faa4ce299e2f599916f1058
 #   90-2000s, 2010s+), {decade} (80s, 90s...) and {year} can be used.
 notion_sort_db = cce7a625036646a791f987eb35a319ef
 sort_playlists = moto
+# Sorting rules in Notion (override calm_max_energy, energetic_min_energy and
+# sort_playlist_name when readable): "Réglages du tri" (thresholds, copy name) and
+# "Règles de genre" (a genre kept in its own playlist, and/or energy points added
+# before the mood is chosen).
+notion_sort_settings_db = 41b481d1393d81359babf1ca3441823c
+notion_genre_db = 41b481d1393d81fca043ee542b604df6
 sort_playlist_name = {playlist} {mood} {period}
