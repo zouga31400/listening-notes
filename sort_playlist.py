@@ -218,6 +218,27 @@ def copy_name(pattern, source, year, mood):
     return " ".join(pattern.split())
 
 
+def add_tracks(service, playlist_id, track_ids):
+    """Adds tracks by batches; when a batch is refused, retries it track by track so that
+    one unavailable track doesn't stop the whole sort. Returns the ids that were refused."""
+    refused = set()
+    for i in range(0, len(track_ids), BATCH):
+        batch = track_ids[i:i + BATCH]
+        try:
+            service.call("POST", "/playlist/addTracks", playlist_id=playlist_id,
+                         track_ids=",".join(str(x) for x in batch), no_duplicate="true")
+            continue
+        except Exception:
+            pass
+        for tid in batch:
+            try:
+                service.call("POST", "/playlist/addTracks", playlist_id=playlist_id,
+                             track_ids=str(tid), no_duplicate="true")
+            except Exception:
+                refused.add(tid)
+    return refused
+
+
 def sort_one(service, source, playlists, config, pattern, rules=(), genres_seen=None):
     tracks = service.playlist_tracks(source["id"])
     log(f"Sorting '{source['name']}': {len(tracks)} tracks")
@@ -272,11 +293,11 @@ def sort_one(service, source, playlists, config, pattern, rules=(), genres_seen=
             managed = MARKER.lower() in (target.get("description") or "").lower()
         present = {tid for tid, _ in current}
         missing = [tid for tid in wanted if tid not in present]
-        for i in range(0, len(missing), BATCH):
-            service.call("POST", "/playlist/addTracks", playlist_id=playlist_id,
-                         track_ids=",".join(str(x) for x in missing[i:i + BATCH]),
-                         no_duplicate="true")
+        refused = add_tracks(service, playlist_id, missing)
+        missing = [tid for tid in missing if tid not in refused]
         added += len(missing)
+        if refused:
+            log(f"   {name}: {len(refused)} track(s) refused by the service, skipped")
         extra = []
         if managed and name not in separate:
             keep, seen = set(wanted), set()
