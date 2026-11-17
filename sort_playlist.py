@@ -21,12 +21,22 @@ tools); a scheduled run sorts only the rows whose last scheduled time came after
 "Last sorted", so a missed time is caught up at the next check. A run by hand with an
 empty input sorts every ticked row.
 
+Sorting rules, from two Notion databases (notion_sort_settings_db, notion_genre_db):
+  - "Sorting settings": the calm / energetic energy thresholds and the copy name;
+  - "Genre rules": one row per genre of the service (the album's genre). A row with a
+    "Playlist" sends the tracks of that genre to that playlist only (no copy by mood and
+    period; no audio analysis); "Energy points" are added to the measured energy before
+    the mood is chosen (Metal +20, Rock +10...). Genres met but not in the table are added
+    to it (points 0, no playlist) so they only have to be filled in.
+config.txt keeps the default values, used when a database is not set or can't be read.
+
 Copies created by this script (description "Created by sort_playlist.py") are kept in
 sync with the original: each run adds what is missing and removes tracks that left the
 original or changed category. A playlist with the same name not created by the script
 is only completed, never trimmed.
 """
 import os
+import re
 import sys
 import time
 from datetime import datetime, timedelta
@@ -62,9 +72,10 @@ def remove(service, playlist_id, playlist_track_ids):
                      playlist_track_ids=",".join(str(t) for t in playlist_track_ids[i:i + BATCH]))
 
 
-def original_year(service, track):
-    """Oldest release year among the relevant versions of the track (a remaster counts
-    in its original decade), as in radio_listen.classify_existing."""
+def original_info(service, track):
+    """(year, genre): oldest release year among the relevant versions of the track (a
+    remaster counts in its original decade, as in radio_listen.classify_existing) and the
+    genre of the album picked."""
     artist = (track.get("performer") or {}).get("name") or ""
     title = track.get("title") or ""
     try:
@@ -78,7 +89,122 @@ def original_year(service, track):
     if not year:
         date = ((track.get("album") or {}).get("release_date_original") or "")[:4]
         year = int(date) if date.isdigit() else None
-    return year
+    genre = ""
+    for candidate in (best, track):
+        genre = (((candidate or {}).get("album") or {}).get("genre") or {}).get("name") or ""
+        if genre:
+            break
+    return year, genre
+
+
+def original_year(service, track):
+    return original_info(service, track)[0]
+
+
+def genre_matches(rule, genre):
+    """True when the rule's genre is the track's genre or one of its words, ignoring case
+    and accents: "Rock" matches "Pop/Rock", "Metal" matches "Heavy Metal"."""
+    r, g = flat(rule), flat(genre)
+    return bool(r and g) and re.search(rf"(?<![a-z0-9]){re.escape(r)}(?![a-z0-9])", g) is not None
+
+
+def genre_effect(rules, genre):
+    """(dedicated playlist or "", energy points) for a genre: the first matching row with a
+    playlist wins; the points of every matching row add up."""
+    playlist, points = "", 0
+    for rule in rules:
+        if genre_matches(rule["genre"], genre):
+            playlist = playlist or rule["playlist"]
+            points += rule["points"]
+    return playlist, points
+
+
+def rules_from_rows(rows):
+    """Genre rules from the pages of the "Genre rules" database."""
+    rules = []
+    for page in rows:
+        props = page.get("properties", {})
+        title = next((v.get("title") for v in props.values() if v.get("type") == "title"), [])
+        genre = "".join(t.get("plain_text", "") for t in title or []).strip()
+        text = "".join(t.get("plain_text", "")
+                       for t in (props.get("Playlist") or {}).get("rich_text") or []).strip()
+        points = (props.get("Energy points") or {}).get("number")
+        if genre:
+            rules.append({"genre": genre, "playlist": text,
+                          "points": int(points) if isinstance(points, (int, float)) else 0})
+    return rules
+
+
+def settings_from_rows(rows):
+    """Overrides of config.txt keys from the pages of the "Sorting settings" database
+    (Setting = title, Value = text)."""
+    keys = {"calm up to": "calm_max_energy", "energetic from": "energetic_min_energy",
+            "copy name": "sort_playlist_name"}
+    found = {}
+    for page in rows:
+        props = page.get("properties", {})
+        title = next((v.get("title") for v in props.values() if v.get("type") == "title"), [])
+        name = flat("".join(t.get("plain_text", "") for t in title or []))
+        value = "".join(t.get("plain_text", "")
+                        for t in (props.get("Value") or {}).get("rich_text") or []).strip()
+        number = (props.get("Value") or {}).get("number")
+        if value == "" and isinstance(number, (int, float)):
+            value = str(int(number))
+        if name in keys and value:
+            if keys[name] != "sort_playlist_name" and not value.lstrip("-").isdigit():
+                continue
+            found[keys[name]] = value
+    return found
+
+
+def load_rules(config):
+    """(config with the Notion settings applied, genre rules, notion, genre database id).
+    The config.txt values are kept when a database is not set or can't be read."""
+    from notion_lists import Notion, database_id
+    token = os.environ.get("NOTION_TOKEN", "").strip()
+    settings_db = (config.get("notion_sort_settings_db") or "").strip()
+    genre_db = (config.get("notion_genre_db") or "").strip()
+    if not token or not (settings_db or genre_db):
+        return config, [], None, None
+    notion = Notion(token)
+    config, rules, genre_id = dict(config), [], None
+    if settings_db:
+        try:
+            rows = list(notion.paginate("POST", f"/databases/{database_id(settings_db)}/query", {}))
+            found = settings_from_rows(rows)
+            config.update(found)
+            log(f"{len(found)} sorting setting(s) read from Notion")
+        except Exception as e:
+            log(f"Sorting settings not read ({type(e).__name__}); config.txt values used")
+    if genre_db:
+        try:
+            genre_id = database_id(genre_db)
+            rows = list(notion.paginate("POST", f"/databases/{genre_id}/query", {}))
+            rules = rules_from_rows(rows)
+            log(f"{len(rules)} genre rule(s) read from Notion")
+        except Exception as e:
+            genre_id = None
+            log(f"Genre rules not read ({type(e).__name__}); no genre rule applied")
+    return config, rules, notion, genre_id
+
+
+def add_new_genres(notion, genre_id, rules, genres):
+    """Adds the genres met and not matched by any rule to the "Genre rules" database."""
+    if not notion or not genre_id:
+        return
+    for genre in sorted(genres):
+        if not genre or any(genre_matches(r["genre"], genre) for r in rules):
+            continue
+        try:
+            notion.call("POST", "/pages", {
+                "parent": {"database_id": genre_id},
+                "properties": {"Genre": {"title": [{"text": {"content": genre}}]},
+                               "Energy points": {"number": 0}}})
+            rules.append({"genre": genre, "playlist": "", "points": 0})
+            log(f"   New genre added to the Genre rules table: {genre}")
+        except Exception as e:
+            log(f"   Could not add a genre to Notion ({type(e).__name__})")
+            return
 
 
 def copy_name(pattern, source, year, mood):
@@ -92,15 +218,27 @@ def copy_name(pattern, source, year, mood):
     return " ".join(pattern.split())
 
 
-def sort_one(service, source, playlists, config, pattern):
+def sort_one(service, source, playlists, config, pattern, rules=(), genres_seen=None):
     tracks = service.playlist_tracks(source["id"])
     log(f"Sorting '{source['name']}': {len(tracks)} tracks")
-    groups, unsorted, no_audio = {}, 0, 0
+    groups, unsorted, no_audio, separate = {}, 0, 0, set()
     for n, t in enumerate(tracks, 1):
         artist = (t.get("performer") or {}).get("name") or ""
         title = t.get("title") or ""
-        year = original_year(service, t)
+        year, genre = original_info(service, t)
+        if genres_seen is not None and genre:
+            genres_seen[genre] = genres_seen.get(genre, 0) + 1
+        dedicated, points = genre_effect(rules, genre)
+        if dedicated:
+            # A genre kept apart: its own playlist, no analysis, no copy by mood and period.
+            groups.setdefault(dedicated, []).append(t["id"])
+            separate.add(dedicated)
+            log_detail(f"   {artist} - {title}: genre {genre} -> {dedicated}")
+            time.sleep(0.2)
+            continue
         feats = preview_features((t.get("isrc") or "").strip().upper() or None, artist, title)
+        if feats and points:
+            feats = dict(feats, energy=feats["energy"] + points)
         mood = mood_of(feats, config) if feats else ""
         if not feats:
             no_audio += 1
@@ -110,7 +248,7 @@ def sort_one(service, source, playlists, config, pattern):
             log_detail(f"   ? {artist} - {title}: year {year or '?'}, no category")
         else:
             groups.setdefault(name, []).append(t["id"])
-            log_detail(f"   {artist} - {title}: {year}, {feats['bpm']} BPM, "
+            log_detail(f"   {artist} - {title}: {year}, {genre}, {feats['bpm']} BPM, "
                        f"energy {feats['energy']} -> {name}")
         if n % 25 == 0:
             log(f"   {n}/{len(tracks)} tracks analyzed")
@@ -123,7 +261,8 @@ def sort_one(service, source, playlists, config, pattern):
         target = by_name.get(flat(name))
         if target is None:
             playlist_id = service.create_playlist(
-                name, f"{MARKER} from the playlist {source['name']}")
+                name, f"{MARKER} (genre playlist)" if name in separate
+                else f"{MARKER} from the playlist {source['name']}")
             created += 1
             current = []
             managed = True
@@ -139,7 +278,7 @@ def sort_one(service, source, playlists, config, pattern):
                          no_duplicate="true")
         added += len(missing)
         extra = []
-        if managed:
+        if managed and name not in separate:
             keep, seen = set(wanted), set()
             for tid, entry in current:
                 if (tid not in keep or tid in seen) and entry:
@@ -150,7 +289,8 @@ def sort_one(service, source, playlists, config, pattern):
             removed += len(extra)
         log(f"   {name}: {len(wanted)} tracks"
             + (f", +{len(missing)}" if missing else "") + (f", -{len(extra)}" if extra else "")
-            + ("" if managed else " (not created by this script: only completed)"))
+            + ("" if managed else " (not created by this script: only completed)")
+            + (" (genre playlist: only completed)" if name in separate else ""))
 
     # Copies of this playlist that no longer get any track are emptied.
     prefix = MARKER.lower() + " from the playlist " + source["name"].strip().lower()
@@ -272,7 +412,6 @@ def main():
     config = load_config()
     if not os.environ.get("MUSIC_EMAIL") or not os.environ.get("MUSIC_PASSWORD"):
         raise SystemExit("MUSIC_EMAIL / MUSIC_PASSWORD secrets missing")
-    pattern = config.get("sort_playlist_name") or "{playlist} {mood} {period}"
     wanted = os.environ.get("PLAYLISTS", "").strip()
     notion = None
     if wanted and wanted != "*":
@@ -292,6 +431,9 @@ def main():
     if not rows:
         log("No playlist to sort")
         return
+    config, rules, rules_notion, genre_db = load_rules(config)
+    pattern = config.get("sort_playlist_name") or "{playlist} {mood} {period}"
+    genres_seen = {}
     service = MusicService(os.environ["MUSIC_EMAIL"].strip(), os.environ["MUSIC_PASSWORD"].strip())
     service.login()
     log("Service login OK")
@@ -307,7 +449,7 @@ def main():
                 notion_report(notion, page_id, error="Playlist not found (check the exact name)")
             continue
         try:
-            copies, unsorted = sort_one(service, source, mine, config, pattern)
+            copies, unsorted = sort_one(service, source, mine, config, pattern, rules, genres_seen)
         except Exception as e:
             log(f"   Sorting failed ({type(e).__name__}): {str(e)[:150]}")
             if notion and page_id:
@@ -315,6 +457,10 @@ def main():
             continue
         if notion and page_id:
             notion_report(notion, page_id, copies, unsorted)
+    if genres_seen:
+        log("Genres met: " + ", ".join(f"{g} ({n})" for g, n in
+                                       sorted(genres_seen.items(), key=lambda x: -x[1])))
+        add_new_genres(rules_notion, genre_db, rules, genres_seen)
 
 
 if __name__ == "__main__" and "--due" in sys.argv:
