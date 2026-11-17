@@ -186,6 +186,27 @@ class Moods(unittest.TestCase):
                          ["Radio Rock 80s", "Radio Pop/Rock 2000s"])
 
 
+class ShowStart(unittest.TestCase):
+    def test_tracks_back_to_back_before_the_show_are_ignored(self):
+        d = r.StartDetector(True)
+        self.assertFalse(d.accept("A"))     # music before the show
+        self.assertFalse(d.accept("B"))     # still back to back
+        d.on_speech()                       # the host speaks
+        self.assertTrue(d.accept("C"))      # first track of the show
+        self.assertEqual(d.ignored, ["A", "B"])
+        self.assertTrue(d.accept("D"))      # then everything is kept
+
+    def test_speech_before_the_first_track_starts_the_show(self):
+        d = r.StartDetector(True)
+        d.on_speech()
+        self.assertTrue(d.accept("A"))
+        self.assertEqual(d.ignored, [])
+
+    def test_inactive_keeps_everything(self):
+        d = r.StartDetector(False)
+        self.assertTrue(d.accept("A"))
+
+
 class ShowEnd(unittest.TestCase):
     def test_run_of_three_ends_the_show_before_the_run(self):
         d = r.EndDetector(3)
