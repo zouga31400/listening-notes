@@ -52,7 +52,7 @@ class NotionWrites(unittest.TestCase):
              mock.patch.object(r.requests, "patch",
                                side_effect=lambda url, **k: sent.update(k["json"]) or Response()):
             self.db.check(r.HISTORY_PROPERTIES)
-        self.assertEqual(set(sent["properties"]), {"Link", "YouTube", "Cover"})
+        self.assertEqual(set(sent["properties"]), {"Link", "YouTube", "Cover", "Start time", "Cover URL"})
         self.assertIn("Link", self.db.properties)
 
     def test_check_survives_refused_schema_change(self):
@@ -81,6 +81,18 @@ class NotionWrites(unittest.TestCase):
         self.assertEqual(body["cover"]["external"]["url"], "https://img/c.jpg")
         self.assertNotIn("icon", body)
         self.assertEqual(props["Cover"]["files"][0]["external"]["url"], "https://img/c.jpg")
+
+    def test_history_keeps_the_exact_start_and_cover_url(self):
+        self.db.properties = {"Title", "Artist", "Played at", "Status", "Start time", "Cover URL"}
+        bodies = []
+        with mock.patch.object(r.requests, "post",
+                               side_effect=lambda url, **k: bodies.append(k["json"]) or Response()):
+            self.db.add_history("Artist", "Song", datetime(2026, 11, 11, 21, 0, 37), "Added",
+                                "", 0, "", {}, cover="https://img/c.jpg")
+        props = bodies[0]["properties"]
+        self.assertEqual(props["Start time"]["rich_text"][0]["text"]["content"],
+                         "2026-11-11T21:00:37")
+        self.assertEqual(props["Cover URL"]["url"], "https://img/c.jpg")
 
     def test_missing_page_has_youtube_and_details(self):
         self.db.properties = set(r.MISSING_PROPERTIES) | {"Title", "Artist", "Date", "Shazam"}
