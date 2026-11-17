@@ -62,6 +62,12 @@ latest_end = 02:00
 # show is taken as started. "off" keeps every track from the start.
 show_start_until = 21:30
 
+# Short music excerpts played during the show (heard only once, between speech): they
+# go only to this playlist (created if missing) and to the Notion history with the
+# status "Excerpt", not to the other playlists, and without a notification.
+# Empty = only in the history.
+excerpts_playlist = Radio Extraits
+
 # Listening frequency, in seconds (minimum 30).
 # listen_interval: normal pace, right after a track.
 # speech_interval: pace after 4 tries without music.

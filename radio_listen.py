@@ -46,6 +46,7 @@ MAX_SKIP = 300
 STREAM_RETRY_SECONDS = 15
 BOX_SET_TRACKS = 30        # albums with more tracks are treated as box sets/compilations
 NEXT_SONG_MARGIN = 4         # listen again this many seconds after a song's estimated end
+EXCERPT_STATUS = "Excerpt"   # history status of a short excerpt played during the show
 SPEECH_GAP_SECONDS = 6       # a longer silence between two songs means speech was missed
 PARIS = ZoneInfo("Europe/Paris")
 BAD_WORDS = re.compile(r"\b(live|karaoke|tribute|cover|instrumental|demo|remix|acoustic"
@@ -1123,6 +1124,25 @@ async def main():
     for t in targets:
         log(f"Playlist '{t['name']}' ({t['label']}): {len(t['present'])} tracks already present")
     categories = Categories(service, existing)
+
+    # Short music excerpts played during the show (heard once, then speech or another
+    # track): kept apart in their own playlist and in the history, status "Excerpt".
+    excerpts = None
+    name = config.get("excerpts_playlist", "").strip()
+    if name:
+        try:
+            playlist_id = service.find_playlist(existing, name)
+            if playlist_id is None:
+                playlist_id = service.create_playlist(
+                    name, "Short excerpts played during the show, recognized automatically")
+                log(f"Playlist created: {name}")
+                present = set()
+            else:
+                present = service.playlist_track_ids(playlist_id)
+            excerpts = {"name": name, "id": playlist_id, "present": present, "added": 0}
+            log(f"Playlist '{name}' (excerpts): {len(present)} tracks already present")
+        except Exception as e:
+            log(f"Playlist '{name}' unavailable ({type(e).__name__}): {str(e)[:150]}")
     if NTFY_TOPIC:
         log("ntfy notifications on")
     notify("Radio listening: listening started",
@@ -1159,6 +1179,42 @@ async def main():
     last_song_end = None    # estimated end of the last confirmed song
     pending = None      # first sighting of a track waiting for confirmation
     recap = []          # "symbol Artist - Title" lines for the end-of-session notification
+    excerpt_count = 0
+    excerpt_keys = set()
+
+    def keep_excerpt(item):
+        """A track heard only once (a short excerpt): its own playlist and the history,
+        nothing else (no main/daily/monthly/mood playlists, no notification)."""
+        nonlocal excerpt_count, logged
+        key = item["key"]
+        if key in seen or key in excerpt_keys or not starter.started:
+            return
+        excerpt_keys.add(key)
+        excerpt_count += 1
+        artist, title, track, match = item["artist"], item["title"], item["track"], item["match"]
+        log_detail(f"   Short excerpt: {artist} - {title}")
+        if excerpts and match is not None and match["id"] not in excerpts["present"]:
+            try:
+                service.call("POST", "/playlist/addTracks", playlist_id=excerpts["id"],
+                             track_ids=str(match["id"]), no_duplicate="true")
+                excerpts["present"].add(match["id"])
+                excerpts["added"] += 1
+            except Exception as e:
+                log(f"   Could not add (excerpts): {type(e).__name__}")
+        recap.append(f"~ {artist} - {title} (excerpt)")
+        if history:
+            song_start, _ = song_bounds(item["out"], None, item["sample_start"])
+            try:
+                history.add_history(artist, title, song_start or item["sample_start"],
+                                    EXCERPT_STATUS,
+                                    (match or {}).get("album", {}).get("title")
+                                    or shazam_meta(track, "Album"),
+                                    (match or {}).get("duration"), track.get("url"),
+                                    track_info(match, track), cover_url(match, track),
+                                    track_link(match))
+                logged += 1
+            except Exception as e:
+                log(f"   Notion history failure ({type(e).__name__})")
 
     def keep(item):
         """Adds a confirmed track to the playlists, Notion and the notifications."""
@@ -1301,7 +1357,7 @@ async def main():
                 pending["tries"] += 1
                 if pending["tries"] >= 2:
                     unconfirmed += 1
-                    log_detail(f"   Not confirmed, ignored: {pending['artist']} - {pending['title']}")
+                    keep_excerpt(pending)
                     pending = None
             if not track:
                 # Speech (or anything that is not a known track): held tracks belong to the show.
@@ -1330,6 +1386,7 @@ async def main():
                         if confirmations > 1 and not (left is not None and left < CYCLE_SECONDS + 20):
                             if pending:
                                 unconfirmed += 1
+                                keep_excerpt(pending)
                             pending = candidate
                             log_detail("   Waiting for a confirmation")
                             confirming = True
@@ -1447,12 +1504,17 @@ async def main():
         log(f"   {t['name']}: {t['added']} tracks added")
     if categories.added or categories.created:
         log(f"   Decade/genre playlists: {categories.added} additions, {categories.created} created")
+    if excerpt_count:
+        log(f"   Short excerpts: {excerpt_count}"
+            + (f", {excerpts['added']} added to {excerpts['name']}" if excerpts else ""))
     summary = (f"{recognized} recognitions, "
                + ", ".join(f"{t['added']} added to {t['name']}" for t in targets))
     if notion:
         summary += f", {noted} missing from the service"
     if unconfirmed:
         summary += f", {unconfirmed} not confirmed"
+    if excerpt_count:
+        summary += f", {excerpt_count} short excerpt(s)"
     if detector.ended:
         summary += (f", show end detected at {ended_at:%H:%M} "
                     f"({len(detector.dropped)} track(s) after the show ignored)")
