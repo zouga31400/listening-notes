@@ -955,6 +955,31 @@ class EndDetector:
         return held
 
 
+class StartDetector:
+    """Detects the start of the show. Before it, the station plays music back to back
+    (no speech): those tracks are not part of the show and are ignored. The show starts
+    with the first track that is not directly preceded by another track, i.e. after
+    speech (the host, a jingle, an announcement)."""
+
+    def __init__(self, active):
+        self.started = not active
+        self.speech = False      # was there speech since the last ignored track?
+        self.ignored = []        # tracks played before the show
+
+    def on_speech(self):
+        self.speech = True
+
+    def accept(self, item):
+        """True when the track belongs to the show; otherwise it is ignored."""
+        if self.started:
+            return True
+        if self.speech:
+            self.started = True
+            return True
+        self.ignored.append(item)
+        return False
+
+
 def song_bounds(out, duration, sample_start):
     """(start, end) of the song in the stream, from Shazam's offset and the song length.
     end is None when the length is unknown; both are None without an offset."""
@@ -1115,6 +1140,14 @@ async def main():
     log(f"Show end detection from {detect_from:%H:%M}: {detector.streak} tracks in a row, "
         f"listening at most until {end:%H:%M}")
 
+    hour, minute = parse_hhmm(config.get("show_start_until"), (21, 30))
+    start_until = start.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    starter = StartDetector(active=not TEST_MODE and start < start_until
+                            and config.get("show_start_until", "").lower() != "off")
+    if not starter.started:
+        log(f"Show start detection until {start_until:%H:%M}: tracks played back to back "
+            "before the first speech are ignored")
+
     from shazamio import Shazam
     shazam = Shazam()
     seen = set()
@@ -1232,6 +1265,9 @@ async def main():
                 log(f"   Notion history failure ({type(e).__name__})")
 
     while datetime.now(PARIS) < end and not detector.ended:
+        if not starter.started and datetime.now(PARIS) >= start_until:
+            starter.started = True
+            log(f"No speech heard before {start_until:%H:%M}: the show is taken as started")
         started = time.time()
         matched = False
         confirming = False
@@ -1269,6 +1305,7 @@ async def main():
                     pending = None
             if not track:
                 # Speech (or anything that is not a known track): held tracks belong to the show.
+                starter.on_speech()
                 for item in detector.on_speech():
                     item["current"] = False
                     keep(item)
@@ -1312,12 +1349,20 @@ async def main():
                                 k["current"] = False
                                 keep(k)
                         last_song_end = song_end
-                        active = datetime.now(PARIS) >= detect_from
-                        kept = detector.on_track(item, active)
-                        if not kept and not detector.ended:
-                            log_detail(f"   Held back (music without speech): {artist} - {title}")
-                        for k in kept:
-                            keep(k)
+                        if gap is not None and gap >= SPEECH_GAP_SECONDS:
+                            starter.on_speech()
+                        was_started = starter.started
+                        if not starter.accept(item):
+                            log_detail(f"   Before the show (music without speech): {artist} - {title}")
+                        else:
+                            if not was_started:
+                                log(f"Show start detected ({len(starter.ignored)} track(s) before it ignored)")
+                            active = datetime.now(PARIS) >= detect_from
+                            kept = detector.on_track(item, active)
+                            if not kept and not detector.ended:
+                                log_detail(f"   Held back (music without speech): {artist} - {title}")
+                            for k in kept:
+                                keep(k)
                 if not confirming:
                     remaining = song_remaining(out, durations.get(key), sample_end)
                     if remaining is not None:

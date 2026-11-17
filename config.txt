@@ -56,6 +56,12 @@ end_detection_from = 00:00
 end_streak = 3
 latest_end = 02:00
 
+# Start of the show: the evening begins with music played back to back, which is not
+# the show. Tracks are ignored until speech is heard; the show starts with the first
+# track after speech. If no speech is heard before show_start_until (Paris time), the
+# show is taken as started. "off" keeps every track from the start.
+show_start_until = 21:30
+
 # Listening frequency, in seconds (minimum 30).
 # listen_interval: normal pace, right after a track.
 # speech_interval: pace after 4 tries without music.
