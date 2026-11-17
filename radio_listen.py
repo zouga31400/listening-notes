@@ -680,7 +680,8 @@ def youtube_link(artist, title):
 # Properties added to the Notion databases when missing (the integration needs the
 # right to edit the database; otherwise these values are simply left out).
 HISTORY_PROPERTIES = {"Decade": {"select": {}}, "Link": {"url": {}}, "YouTube": {"url": {}},
-                      "Cover": {"files": {}}}
+                      "Cover": {"files": {}}, "Start time": {"rich_text": {}},
+                      "Cover URL": {"url": {}}}
 MISSING_PROPERTIES = {"YouTube": {"url": {}}, "Album": {"rich_text": {}},
                       "Year": {"number": {}}, "Decade": {"select": {}}, "Genre": {"rich_text": {}},
                       "Cover": {"files": {}}}
@@ -750,7 +751,12 @@ class Notion:
             "Artist": text_prop(artist),
             "Played at": {"date": {"start": when.isoformat(timespec="seconds")}},
             "Status": {"select": {"name": status}},
+            # Notion dates keep only the minute: the exact start, to the second, for
+            # other tools (e.g. podcast chapters).
+            "Start time": text_prop(when.isoformat(timespec="seconds")),
         }
+        if cover:
+            props["Cover URL"] = {"url": cover}
         if album:
             props["Album"] = text_prop(album)
         if duration:
