@@ -52,5 +52,29 @@ class GenreRules(unittest.TestCase):
                                  "sort_playlist_name": "{playlist} {period} {mood}"})
 
 
+class FakeService:
+    def __init__(self, bad):
+        self.bad, self.added = bad, []
+
+    def call(self, method, path, **kw):
+        ids = [int(x) for x in kw["track_ids"].split(",")]
+        if self.bad & set(ids):
+            raise RuntimeError("400")
+        self.added.extend(ids)
+
+
+class AddTracks(unittest.TestCase):
+    def test_one_refused_track_does_not_stop_the_others(self):
+        service = FakeService({3})
+        refused = sp.add_tracks(service, 1, [1, 2, 3, 4])
+        self.assertEqual(refused, {3})
+        self.assertEqual(service.added, [1, 2, 4])
+
+    def test_batch_added_in_one_call_when_all_accepted(self):
+        service = FakeService(set())
+        self.assertEqual(sp.add_tracks(service, 1, [1, 2, 3]), set())
+        self.assertEqual(service.added, [1, 2, 3])
+
+
 if __name__ == "__main__":
     unittest.main()
