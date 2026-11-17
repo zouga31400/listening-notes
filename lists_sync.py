@@ -36,7 +36,16 @@ WORK_RE = re.compile(r"\b(riff tapes?|rough|outtakes?|alternate|alt|early|take \
 # "version" values that still mean the studio track. Any other version is mildly penalized.
 STUDIO_VERSION_RE = re.compile(r"^\s*(album|lp|original|studio|single|stereo|explicit|clean)?\s*"
                                r"(version|mix)?\s*$|remaster")
-COMPILATION_RE = re.compile(r"\b(best of|greatest hits|hits|collection|compilation|anthology|essential)\b")
+# Best-ofs and compilations, matched on the album title without accents. French and Spanish
+# words are matching data, kept on purpose.
+COMPILATION_RE = re.compile(
+    r"\b(best of|greatest hits|the hits|hits collection|collection|anthology|anthologie|essential|essentials"
+    r"|the very best|very best|integrale|ultimate|compilation|platinum|definitive|the singles"
+    r"|singles collection|le meilleur|tubes|exitos|grandes exitos|lo mejor|retrospective|b sides|rarities"
+    r"|raretes|now that s what i call|simply the best|hits|\d+ (titres|tracks|succes|chansons|hits))\b")
+VARIOUS_ARTISTS = {"various artists", "various", "artistes divers", "artistes varies",
+                   "multi interpretes", "verschiedene interpreten", "compilation", "varios artistas"}
+BOX_SET_TRACKS = 30  # albums with more tracks are treated as box sets or compilations
 
 # Artist / title separator: a dash (-, –, —, ‐, ‒, −) surrounded by spaces.
 SEP_SPACED = re.compile(r"\s+[-–—‐‒−]+\s+")
@@ -461,11 +470,44 @@ def score(track, artist, title, request_raw):
     album = ((track.get("album") or {}).get("title") or "").lower()
     if BAD_RE.search(album) and not BAD_RE.search(request_raw):
         points -= 2
-    if COMPILATION_RE.search(album):
-        points -= 0.5
+    points += album_bonus(track)
     if "remaster" in raw:
         points -= 0.3
     return points
+
+
+def flat(text):
+    """Lowercase without accents or punctuation, parentheses kept (unlike norm)."""
+    text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+    return " ".join(re.sub(r"[^a-z0-9 ]+", " ", text.replace("&", " and ")).split())
+
+
+def is_compilation(album):
+    """Best-of, compilation, various-artists album or box set."""
+    kind = str(album.get("release_type") or album.get("product_type") or "").lower()
+    text = flat(" ".join([album.get("title") or "", album.get("version") or ""]))
+    album_artist = flat((album.get("artist") or {}).get("name"))
+    return (kind == "compilation" or album_artist in VARIOUS_ARTISTS or bool(COMPILATION_RE.search(text))
+            or (album.get("tracks_count") or 0) > BOX_SET_TRACKS)
+
+
+def album_bonus(track):
+    """The original album first, then a single, and last best-ofs and compilations
+    (as the radio does). A song only found on a compilation (e.g. a soundtrack) is still kept."""
+    album = track.get("album") or {}
+    if not album:
+        return 0
+    if is_compilation(album):
+        return -3
+    kind = str(album.get("release_type") or album.get("product_type") or "").lower()
+    if kind in ("single", "epsingle") or 0 < (album.get("tracks_count") or 0) <= 3:
+        return -1
+    return 0
+
+
+def album_date(track):
+    """Original release date of the album, for ties: the oldest release wins."""
+    return (track.get("album") or {}).get("release_date_original") or "9999"
 
 
 def best_match(service, artist, title):
@@ -481,17 +523,15 @@ def best_match(service, artist, title):
         if query.lower() in seen_queries:
             continue
         seen_queries.add(query.lower())
-        best, best_score = None, None
+        candidates = []
         for position, track in enumerate(service.search(query)):
             s = score(track, n_artist, n_title, request_raw)
-            if s is None:
-                continue
-            s -= position * 0.01  # on a tie, keep the service's relevance order
-            if best_score is None or s > best_score:
-                best, best_score = track, s
+            if s is not None:
+                # On a tie: the oldest release, then the service's relevance order.
+                candidates.append((-s, album_date(track), position, track))
         time.sleep(SEARCH_PAUSE)
-        if best is not None:
-            return best
+        if candidates:
+            return min(candidates, key=lambda c: c[:3])[3]
     return None
 
 
