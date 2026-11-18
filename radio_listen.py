@@ -1043,7 +1043,9 @@ def compute_window(config):
     return listen_from, end
 
 
-async def main():
+async def main(offshow=None):
+    """The evening show. `offshow` (radio_offshow.py, always-on machine only) receives the
+    tracks played outside the show: before its detected start and after its detected end."""
     check_secrets()
     config = load_config()
     listen_from, end = compute_window(config)
@@ -1417,6 +1419,8 @@ async def main():
                         was_started = starter.started
                         if not starter.accept(item):
                             log_detail(f"   Before the show (music without speech): {artist} - {title}")
+                            if offshow:
+                                offshow.keep(item)
                         else:
                             if not was_started:
                                 log(f"Show start detected ({len(starter.ignored)} track(s) before it ignored)")
@@ -1487,6 +1491,10 @@ async def main():
             show_end = ended_at
         log(f"Show end detected at {ended_at:%H:%M} ({detector.streak} tracks in a row), "
             f"show ended around {show_end:%H:%M}")
+        if offshow:
+            for item in detector.dropped:
+                item["current"] = False
+                offshow.keep(item)
         notify("Show ended", f"show-ended {ended_at.isoformat(timespec='seconds')} "
                f"ends-at {show_end.isoformat(timespec='seconds')}",
                tags=["show_end"], topic=SHOW_END_TOPIC or None)

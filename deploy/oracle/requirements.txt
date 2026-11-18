@@ -1,0 +1,5 @@
+# Same pinned versions as .github/workflows/radio.yml: an untested upgrade cannot break the radio.
+shazamio==0.9.0
+shazamio-core==2.0.0
+requests
+librosa==0.11.0

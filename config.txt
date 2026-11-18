@@ -121,3 +121,27 @@ sort_playlists = moto
 notion_sort_settings_db = 41b481d1393d81359babf1ca3441823c
 notion_genre_db = 41b481d1393d81fca043ee542b604df6
 sort_playlist_name = {playlist} {mood} {period}
+
+# Always-on listening outside the show (radio_offshow.py, on a small cloud server that runs
+# all the time; see deploy/oracle/README.md). Daytime, weekends, the music before the show
+# starts and after it ends go to these playlists (created if missing) and to their own
+# Notion history. No daily playlist. Leave a value empty to turn that playlist off.
+# No notifications outside the show, except errors.
+offshow_main_playlist = Radio flux hors émission
+offshow_monthly_playlist = Radio flux hors émission {month}
+offshow_decade_playlist = Radio flux {decade}
+offshow_genre_playlist =
+offshow_genre_decade_playlist =
+offshow_mood_playlist =
+offshow_mood_period_playlist = Radio flux {mood} {period}
+# "Radio - Hors émission" Notion database (ID, not secret; same NOTION_TOKEN).
+offshow_history_db = 41c481d1393d81c5aa18efcfa446d980
+# Listening pace outside the show, in seconds (minimum 30), gentler than the show's.
+offshow_listen_interval = 60
+offshow_speech_interval = 120
+# no: the show stays on GitHub Actions; the server pauses from listen_start on weekdays until
+#     the "show ended" signal (or latest_end).
+# yes: the server also runs the show (same code), with the tracks before its start and after
+#     its end going to the off-show playlists. Then turn off the external call that starts
+#     the "Radio listening" workflow in the evening.
+offshow_show_here = no

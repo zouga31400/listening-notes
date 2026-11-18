@@ -1,0 +1,16 @@
+[Unit]
+Description=Always-on radio listening (off-show playlists, and the show if asked)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=radio
+WorkingDirectory=/opt/listening-notes/app
+EnvironmentFile=/etc/listening-notes/radio.env
+Environment=PATH=/opt/listening-notes/venv/bin:/usr/bin:/bin
+ExecStart=/opt/listening-notes/venv/bin/python radio_offshow.py
+Restart=always
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
