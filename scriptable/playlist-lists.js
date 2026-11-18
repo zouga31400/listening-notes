@@ -299,6 +299,8 @@ const dayOf=(d)=>{const p=pp(d);return p.year+'-'+p.month+'-'+p.day};
 const U=(s)=>new Date(s+'T12:00:00Z');
 const L=D.lists.map(r=>{const d=new Date(r.created);const p=pp(d);return Object.assign({},r,{d,day:dayOf(d),time:p.hour+'h'+p.minute})}).sort((a,b)=>b.d-a.d);
 const todayDay=dayOf(new Date());
+// Older pages have no "Film" value: a name that speaks of a film, a soundtrack or a series counts too.
+const isFilm=(r)=>!!r.film||r.status==='Album'||/bande originale|soundtrack|\\bost\\b|\\bfilms?\\b|série|serie tv|james bond/i.test(r.title);
 const cap=(x)=>x.charAt(0).toUpperCase()+x.slice(1);
 const plural=(n,w)=>n+' '+w+(n>1?'s':'');
 const ST={'To create':['En attente','To_create'],'Created':['Créée','Created'],'Album':['Album','Album'],'Error':['Erreur','Error']};
@@ -362,7 +364,7 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     const b=section(M,'En erreur',L.filter(r=>r.status==='Error'),'Ouvre la page Notion : le rapport en bas dit pourquoi. Corrige la ligne, remets le statut sur « To create ».');
     const c=section(M,'Titres introuvables',L.filter(r=>r.status==='Created'&&r.notFound>0).sort((x,y)=>y.notFound-x.notFound),'Corrige ou remplace la ligne dans Notion, puis remets le statut sur « To create ».');
     if(!(a||b||c))M.append(el('div','empty','Tout est en ordre ✅'))}
-  if(tab==='films'){const rows=L.filter(r=>r.film||r.status==='Album');
+  if(tab==='films'){const rows=L.filter(isFilm);
     if(!rows.length){M.append(el('div','empty','Aucune playlist de film pour l\\'instant.'));return}
     const alb=rows.filter(r=>r.status==='Album').length;
     M.append(el('div','hint',plural(rows.length,'film')+' ou série · '+plural(alb,'album')+' trouvé'+(alb>1?'s':'')+' à la place d\\'une playlist.'));
@@ -377,7 +379,7 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     const sc={'Créée':'var(--ok)','En attente':'var(--wait)','Album':'var(--alb)','Erreur':'var(--err)'};
     M.append(bars('Statuts',['To create','Created','Album','Error'].map(s=>[ST[s][0],L.filter(r=>r.status===s).length]).filter(x=>x[1]),k=>sc[k]));
     M.append(bars('Auteurs',count(L,r=>r.author||'Par défaut').sort((a,b)=>b[1]-a[1]).slice(0,8)));
-    M.append(bars('Films et séries',count(L,r=>r.film?'Film / série':'Autres listes').sort((a,b)=>b[1]-a[1])))}}
+    M.append(bars('Films et séries',count(L,r=>isFilm(r)?'Film / série':'Autres listes').sort((a,b)=>b[1]-a[1])))}}
 function setTab(){document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));render();window.scrollTo(0,0)}
 document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;setTab()});
 render();

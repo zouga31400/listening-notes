@@ -5,6 +5,11 @@ on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
+    inputs:
+      backfill_covers:
+        description: "Give a cover to the Created pages that have none (older pages), then stop"
+        type: boolean
+        default: false
 
 concurrency:
   group: notion-lists
@@ -67,7 +72,7 @@ jobs:
   process:
     name: process
     needs: check
-    if: needs.check.outputs.pending != '0'
+    if: needs.check.outputs.pending != '0' || inputs.backfill_covers
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -86,5 +91,8 @@ jobs:
           python-version: "3.12"
       - name: Install requests
         run: pip install requests
+      - name: Give a cover to the older pages
+        if: inputs.backfill_covers
+        run: python notion_lists.py --backfill-covers
       - name: Process the Notion pages marked "To create"
         run: python notion_lists.py

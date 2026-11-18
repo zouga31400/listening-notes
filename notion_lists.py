@@ -330,6 +330,58 @@ def handle(db, service, page):
     return True
 
 
+PLAYLIST_ID_RE = re.compile(r"/playlist/(\d+)")
+
+
+def backfill_covers():
+    """--backfill-covers mode: gives a page cover and icon to the "Created" pages that have none
+    (older pages), from the first album of their playlist. No re-sync, no notification."""
+    token = os.environ.get("NOTION_TOKEN", "").strip()
+    raw_db = config_value(CONFIG_KEY) or os.environ.get("NOTION_DATABASE_ID", "").strip()
+    if not token or not raw_db:
+        lq.log(f"Notion lists: not configured (NOTION_TOKEN secret or {CONFIG_KEY} missing).")
+        return 0
+    try:
+        db = Database(Notion(token), database_id(raw_db))
+        body = {"filter": {"property": STATUS_PROP, db.status_type: {"equals": DONE}}}
+        pages = [p for p in db.notion.paginate("POST", f"/databases/{db.id}/query", body)
+                 if not p.get("cover")]
+    except NotionError as e:
+        lq.log(str(e))
+        return 1
+    lq.log(f"{len(pages)} \"{DONE}\" page(s) without a cover.")
+    if not pages:
+        return 0
+    service = lq.connect()
+    if service is None:
+        return 1
+    done = 0
+    for page in pages:
+        link = ((page.get("properties") or {}).get("Link") or {}).get("url") or ""
+        match = PLAYLIST_ID_RE.search(link)
+        name = db.title_of(page)
+        if not match:
+            lq.log(f"  {name}: no playlist link, skipped.")
+            continue
+        try:
+            items = service.playlist_tracks(match.group(1))
+            cover = next((c for c in (lq.track_cover(t) for t in items) if c), None)
+            if not cover:
+                lq.log(f"  {name}: no cover found in the playlist.")
+                continue
+            db.notion.call("PATCH", f"/pages/{page['id']}", {
+                "cover": {"type": "external", "external": {"url": cover}},
+                "icon": {"type": "external", "external": {"url": cover}}})
+            done += 1
+            lq.log(f"  {name}: cover set.")
+        except (NotionError, lq.ServiceError) as e:
+            lq.log(f"  {name}: {e}")
+        except Exception as e:  # generic message: no detail that could hold a secret
+            lq.log(f"  {name}: unexpected error ({type(e).__name__}).")
+    lq.log(f"{done} cover(s) set.")
+    return 0
+
+
 def count_pending():
     """--count mode: writes pending=<n> to GITHUB_OUTPUT (1 on a Notion error, so the
     processing job runs and reports it). Doesn't touch the music service."""
@@ -388,4 +440,6 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(count_pending() if "--count" in sys.argv[1:] else main())
+    if "--count" in sys.argv[1:]:
+        sys.exit(count_pending())
+    sys.exit(backfill_covers() if "--backfill-covers" in sys.argv[1:] else main())
