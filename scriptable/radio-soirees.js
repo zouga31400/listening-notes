@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-18 · 6";   // shown at the bottom of the app
+const VERSION = "2026-11-18 · 7";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -185,6 +185,7 @@ async function image(url) {
 
 async function widget(data) {
   const w = new ListWidget();
+  w.url = URLScheme.forRunningScript();   // a tap opens Scriptable and runs this script
   w.backgroundColor = new Color("#16181d");
   w.refreshAfterDate = new Date(Date.now() + 15 * 60e3);
   const fam = config.widgetFamily || "medium";
