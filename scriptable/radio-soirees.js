@@ -261,7 +261,8 @@ h2{font-size:21px;margin:22px 0 10px;letter-spacing:-.2px}
 .meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .t{font-size:18px;font-weight:700;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .a{font-size:15px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.d{font-size:14px;color:var(--muted)}
-.chip{align-self:flex-start;font-size:12px;padding:2px 9px;border-radius:99px;font-weight:600;margin-top:3px}
+.chips{display:flex;gap:6px;margin-top:3px;min-width:0}.chip{font-size:12px;padding:2px 9px;border-radius:99px;font-weight:600;white-space:nowrap;flex:none}
+.chip.genre{background:var(--seg);color:var(--muted);flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .Calme{background:var(--calme-bg);color:var(--calme)}.Groove{background:var(--groove-bg);color:var(--groove)}.Énergique{background:var(--ener-bg);color:var(--ener)}
 .ex .t{font-style:italic;font-weight:600}.ex{opacity:.78}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.grid .card{flex-direction:column;align-items:stretch;gap:8px;padding:10px;margin:0}
@@ -290,9 +291,17 @@ const H=D.history.map(r=>{const d=new Date(r.start);const p=pp(d);return Object.
 const T=H.filter(r=>r.status!=='Excerpt');
 const evs=[...new Set(H.map(r=>r.ev))].sort().reverse();
 const todayEv=evOf(new Date());
-const monday=(s)=>{const d=U(s);const k=(d.getUTCDay()+6)%7;return new Date(d.getTime()-k*864e5)};
-const weekLabel=(ev)=>{const w=Math.round((monday(todayEv)-monday(ev))/(7*864e5));
-  if(w<=0)return 'Cette semaine';if(w===1)return 'La semaine dernière';return 'Semaine du '+new Intl.DateTimeFormat('fr-FR',{timeZone:'UTC',day:'numeric',month:'long'}).format(monday(ev))};
+const cap=(x)=>x.charAt(0).toUpperCase()+x.slice(1);
+const dayDiff=(ev)=>Math.round((U(todayEv)-U(ev))/864e5);
+const monthName=(ev)=>cap(new Intl.DateTimeFormat('fr-FR',{timeZone:'UTC',month:'long',year:'numeric'}).format(U(ev)));
+const groupLabel=(ev)=>{const d=dayDiff(ev);
+  if(d<=0)return 'Aujourd\\'hui';if(d===1)return 'Hier';
+  if(d<=6)return cap(new Intl.DateTimeFormat('fr-FR',{timeZone:'UTC',weekday:'long'}).format(U(ev)));
+  if(d<=13)return 'La semaine dernière';
+  const y=+ev.slice(0,4),m=+ev.slice(5,7),ty=+todayEv.slice(0,4),tm=+todayEv.slice(5,7);
+  if(y*12+m===ty*12+tm-1)return 'Le mois dernier';
+  if(y===ty)return monthName(ev);
+  return String(y)};
 let cur=evs[0],tab='biblio',layout='list',query='';
 const nT=(ev)=>T.filter(r=>r.ev===ev).length;
 document.getElementById('sub').textContent=H.length?(T.length+' titres sur '+evs.length+' soirées'):'Aucune donnée';
@@ -305,9 +314,9 @@ function card(r){
   let img;if(r.cover){img=el('img','cover');img.loading='lazy';img.alt='';img.src=r.cover}else img=el('div','cover');a.append(img);
   const m=el('div','meta');m.append(el('div','t',r.title),el('div','a',r.artist));
   const extra=[r.status==='Excerpt'?'Extrait court':'',r.album&&r.year?r.album+' · '+r.year:(r.album||r.year||'')].filter(Boolean).join(' · ');
-  m.append(el('div','d',dateLine(r)));if(extra)m.append(el('div','d',extra));if(r.mood)m.append(el('span','chip '+r.mood,r.mood));
+  m.append(el('div','d',dateLine(r)));if(extra)m.append(el('div','d',extra));if(r.genre||r.mood){const c=el('div','chips');if(r.genre)c.append(el('span','chip genre',r.genre));if(r.mood)c.append(el('span','chip '+r.mood,r.mood));m.append(c)}
   a.append(m);return a}
-function groups(rows){const g=new Map();for(const r of rows){const k=weekLabel(r.ev);if(!g.has(k))g.set(k,[]);g.get(k).push(r)}return g}
+function groups(rows){const g=new Map();for(const r of rows){const k=groupLabel(r.ev);if(!g.has(k))g.set(k,[]);g.get(k).push(r)}return g}
 function bars(title,items,color){const c=el('div','box');c.append(el('h3',null,title));const mx=Math.max(1,...items.map(x=>x[1]));
   for(const [k,v] of items){const b=el('div','hb');const tr=el('div','tr');const i=el('i');i.style.width=(100*v/mx)+'%';if(color)i.style.background=color(k);tr.append(i);b.append(el('span','name',k),tr,el('span','n',String(v)));c.append(b)}return c}
 const count=(arr,f)=>{const m=new Map();for(const r of arr){const k=f(r);if(k)m.set(k,(m.get(k)||0)+1)}return [...m]};
