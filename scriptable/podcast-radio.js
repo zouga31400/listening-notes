@@ -7,7 +7,7 @@
 // open the episodes containing them).
 // Reset the address: run the script with the parameter reset=1.
 
-const VERSION = "2026-11-18 · 2";   // shown at the bottom of the app
+const VERSION = "2026-11-18 · 3";   // shown at the bottom of the app
 const KEY = "podcast_radio_feed_url";
 const fm = FileManager.local();
 const DIR = fm.joinPath(fm.documentsDirectory(), "podcast-radio");
@@ -184,7 +184,7 @@ async function loadData() {
     cover: coverUri(e.id),
   }));
   if (!episodes.length) { const e = new Error("empty"); e.code = 0; throw e; }
-  return {episodes, offline, at: archive.at || "", feedUrl: url};
+  return {episodes, offline, at: archive.at || ""};
 }
 
 // ---------- Page (runs in the web view: written as a function, injected as text) ----------
@@ -315,13 +315,13 @@ function page(D) {
     wrap.append(cover(e, "dcover"));
     wrap.append(el("h2", "dt", cap(fmt(e.date, {weekday: "long", day: "numeric", month: "long", year: "numeric"}))));
     wrap.append(el("div", "d", meta(e)));
-    if (e.available && D.feedUrl) {
-      // The podcast apps only open the show (no link to one episode): the latest ones are at the top.
+    if (e.available) {
+      // The apps are only opened (no link to one episode): the latest ones are at the top.
       const play = el("div", "play");
       const a1 = el("a", "btn", "▶ Overcast");
-      a1.href = "overcast://x-callback-url/add?url=" + encodeURIComponent(D.feedUrl);
+      a1.href = "overcast://";
       const a2 = el("a", "btn", "▶ Apple Podcasts");
-      a2.href = D.feedUrl.replace(/^https?:\/\//, "podcast://");
+      a2.href = "podcasts://";
       play.append(a1, a2);
       wrap.append(play);
     }
@@ -541,7 +541,7 @@ function html(data) {
 // ---------- App ----------
 async function app(data) {
   const wv = new WebView();
-  // Podcast app links (overcast:, podcast:) open outside the web view.
+  // Podcast app links (overcast:, podcasts:) open outside the web view.
   wv.shouldAllowRequest = (req) => {
     const u = req.url || "";
     if (/^(overcast|podcast|podcasts):/i.test(u)) { Safari.open(u); return false; }
