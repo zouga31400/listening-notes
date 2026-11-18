@@ -710,7 +710,8 @@ def youtube_link(artist, title):
 HISTORY_PROPERTIES = {"Decade": {"select": {}}, "Link": {"url": {}}, "YouTube": {"url": {}},
                       "Cover": {"files": {}}, "Start time": {"rich_text": {}},
                       "Cover URL": {"url": {}}, "Album link": {"url": {}},
-                      "Track": {"rich_text": {}}, "Day playlist": {"url": {}}}
+                      "Track": {"rich_text": {}}, "Day playlist": {"url": {}},
+                      "Month playlist": {"url": {}}}
 MISSING_PROPERTIES = {"YouTube": {"url": {}}, "Album": {"rich_text": {}},
                       "Year": {"number": {}}, "Decade": {"select": {}}, "Genre": {"rich_text": {}},
                       "Cover": {"files": {}}}
@@ -773,7 +774,8 @@ class Notion:
         return len(r.json().get("results", []))
 
     def add_history(self, artist, title, when, status, album, duration, shazam_url, info=None,
-                    cover="", link="", album_url="", position="", day_playlist=""):
+                    cover="", link="", album_url="", position="", day_playlist="",
+                    month_playlist=""):
         info = info or {}
         props = {
             "Title": {"title": [{"text": {"content": (title or "?")[:2000]}}]},
@@ -803,6 +805,8 @@ class Notion:
             props["Track"] = text_prop(position)
         if day_playlist:
             props["Day playlist"] = {"url": day_playlist}
+        if month_playlist:
+            props["Month playlist"] = {"url": month_playlist}
         props["YouTube"] = {"url": youtube_link(artist, title)}
         for key, prop in (("bpm", "BPM"), ("energy", "Energy")):
             if info.get(key) is not None:
@@ -1362,6 +1366,9 @@ async def main(offshow=None):
                                     album_link(match), track_position(match),
                                     playlist_link(next((t["id"] for t in targets
                                                         if t["label"] == "daily"), None))
+                                    if match is not None else "",
+                                    playlist_link(next((t["id"] for t in targets
+                                                        if t["label"] == "monthly"), None))
                                     if match is not None else "")
                 logged += 1
             except Exception as e:

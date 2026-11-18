@@ -121,7 +121,7 @@ async function loadData() {
           year: prop(p.Year), decade: prop(p.Decade) || "", genre: prop(p.Genre) || "",
           mood: prop(p.Mood) || "", status: prop(p.Status) || "", link: prop(p.Link) || "",
           albumLink: prop(p["Album link"]) || "", position: prop(p.Track) || "",
-          dayPlaylist: prop(p["Day playlist"]) || "",
+          dayPlaylist: prop(p["Day playlist"]) || "", monthPlaylist: prop(p["Month playlist"]) || "",
           shazam: prop(p.Shazam) || "", youtube: prop(p.YouTube) || "",
           cover: prop(p["Cover URL"]) || prop(p.Cover) || "",
         };
@@ -316,7 +316,8 @@ if(D.offline)W.append(el('div','warn',D.offline));
 function dateLine(r){return new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',weekday:'short',day:'numeric',month:'short'}).format(r.d)+' à '+r.time}
 function card(r){
   const a=el('div','card'+(r.status==='Excerpt'?' ex':''));
-  const main=r.dayPlaylist||r.link||r.shazam||r.youtube||'';
+  const list=r.dayPlaylist||r.monthPlaylist;  // the daily playlist, else the monthly one
+  const main=list||r.link||r.shazam||r.youtube||'';
   let img;if(r.cover){img=el('img','cover');img.loading='lazy';img.alt='';img.src=r.cover}else img=el('div','cover');
   if(main){const l=el('a','cvl');l.href=main;l.append(img);a.append(l)}else a.append(img);
   const m=el('div','meta');m.append(el('div','t',r.title),el('div','a',r.artist));
@@ -325,8 +326,8 @@ function card(r){
   const extra=[r.status==='Excerpt'?'Extrait court':'',alb,r.position].filter(Boolean).join(' · ');if(extra)m.append(el('div','d',extra));
   if(r.genre||r.mood){const c=el('div','chips');if(r.genre)c.append(el('span','chip genre',r.genre));if(r.mood)c.append(el('span','chip '+r.mood,r.mood));m.append(c)}
   const acts=el('div','acts');
-  if(r.dayPlaylist){const x=el('a',null,'▶ Playlist du jour');x.href=r.dayPlaylist;acts.append(x)}
-  if(r.link){const x=el('a',null,r.dayPlaylist?'Titre':'▶ Titre');x.href=r.link;acts.append(x)}
+  if(list){const x=el('a',null,r.dayPlaylist?'▶ Playlist du jour':'▶ Playlist du mois');x.href=list;acts.append(x)}
+  if(r.link){const x=el('a',null,list?'Titre':'▶ Titre');x.href=r.link;acts.append(x)}
   if(r.albumLink){const x=el('a',null,'Album');x.href=r.albumLink;acts.append(x)}
   if(!r.link&&r.shazam){const x=el('a',null,'Shazam');x.href=r.shazam;acts.append(x)}
   if(acts.children.length)m.append(acts);
