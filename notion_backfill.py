@@ -96,7 +96,7 @@ def backfill(db, service, counts, daily_ids=None, pattern="", month_pattern=""):
 
         # Link of the daily playlist of that evening, while that playlist still exists.
         started = ((props.get("Played at") or {}).get("date") or {}).get("start")
-        if (daily_ids and pattern and started and "Day playlist" in db.properties
+        if (daily_ids and pattern and started and link_url and "Day playlist" in db.properties
                 and not (props.get("Day playlist") or {}).get("url")):
             try:
                 name = pattern.replace("{date}", evening_date(started)).strip().lower()
@@ -106,7 +106,7 @@ def backfill(db, service, counts, daily_ids=None, pattern="", month_pattern=""):
                 counts["errors"] += 1
 
         # Link of the monthly playlist of that evening (kept, unlike the daily ones).
-        if (daily_ids and month_pattern and started and "Month playlist" in db.properties
+        if (daily_ids and month_pattern and started and link_url and "Month playlist" in db.properties
                 and not (props.get("Month playlist") or {}).get("url")):
             try:
                 name = month_pattern.replace("{month}", evening_date(started)[:7]).strip().lower()
