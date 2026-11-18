@@ -53,7 +53,8 @@ class NotionWrites(unittest.TestCase):
                                side_effect=lambda url, **k: sent.update(k["json"]) or Response()):
             self.db.check(r.HISTORY_PROPERTIES)
         self.assertEqual(set(sent["properties"]), {"Link", "YouTube", "Cover", "Start time", "Cover URL",
-                                                         "Album link", "Track", "Day playlist"})
+                                                         "Album link", "Track", "Day playlist",
+                                                         "Month playlist"})
         self.assertIn("Link", self.db.properties)
 
     def test_check_survives_refused_schema_change(self):
@@ -108,13 +109,16 @@ class NotionWrites(unittest.TestCase):
         self.assertEqual(props["Track"]["rich_text"][0]["text"]["content"], "Piste 7/12")
 
     def test_history_has_day_playlist_link(self):
-        self.db.properties = {"Title", "Artist", "Played at", "Status", "Day playlist"}
+        self.db.properties = {"Title", "Artist", "Played at", "Status", "Day playlist",
+                              "Month playlist"}
         bodies = []
         with mock.patch.object(r.requests, "post",
                                side_effect=lambda url, **k: bodies.append(k["json"]) or Response()):
             self.db.add_history("Artist", "Song", datetime(2026, 11, 11, 21, 0), "Added",
-                                "", 0, "", {}, day_playlist="https://web/playlist/5")
+                                "", 0, "", {}, day_playlist="https://web/playlist/5",
+                                month_playlist="https://web/playlist/6")
         self.assertEqual(bodies[0]["properties"]["Day playlist"]["url"], "https://web/playlist/5")
+        self.assertEqual(bodies[0]["properties"]["Month playlist"]["url"], "https://web/playlist/6")
         with mock.patch.dict(r.os.environ, {"MUSIC_WEB_URL": "https://web"}):
             self.assertEqual(r.playlist_link(5), "https://web/playlist/5")
             self.assertEqual(r.playlist_link(None), "")

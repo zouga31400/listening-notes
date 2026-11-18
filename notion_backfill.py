@@ -45,7 +45,7 @@ def evening_date(start):
     return (when.astimezone(r.PARIS) - timedelta(hours=6)).strftime("%Y-%m-%d")
 
 
-def backfill(db, service, counts, daily_ids=None, pattern=""):
+def backfill(db, service, counts, daily_ids=None, pattern="", month_pattern=""):
     for page in pages(db):
         props = page.get("properties") or {}
         title, artist = plain(props.get("Title")), plain(props.get("Artist"))
@@ -105,6 +105,16 @@ def backfill(db, service, counts, daily_ids=None, pattern=""):
             except Exception:
                 counts["errors"] += 1
 
+        # Link of the monthly playlist of that evening (kept, unlike the daily ones).
+        if (daily_ids and month_pattern and started and "Month playlist" in db.properties
+                and not (props.get("Month playlist") or {}).get("url")):
+            try:
+                name = month_pattern.replace("{month}", evening_date(started)[:7]).strip().lower()
+                if daily_ids.get(name):
+                    update["Month playlist"] = {"url": r.playlist_link(daily_ids[name])}
+            except Exception:
+                counts["errors"] += 1
+
         update = {k: v for k, v in update.items() if k in db.properties}
         body = {}
         if update:
@@ -151,7 +161,7 @@ def main():
         if key == "notion_history_db" and service:
             daily_ids = {p["name"].strip().lower(): p["id"] for p in service.list_playlists()}
         backfill(db, service if key == "notion_history_db" else None, counts,
-                 daily_ids, config.get("daily_playlist", ""))
+                 daily_ids, config.get("daily_playlist", ""), config.get("monthly_playlist", ""))
         print(f"Notion {label}: {counts['updated']} page(s) completed, {counts['covers']} "
               f"cover(s), {counts['matched']} found on the service, {counts['errors']} error(s)",
               flush=True)
