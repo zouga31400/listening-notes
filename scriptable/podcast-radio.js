@@ -7,7 +7,7 @@
 // open the episodes containing them).
 // Reset the address: run the script with the parameter reset=1.
 
-const VERSION = "2026-11-18 · 3";   // shown at the bottom of the app
+const VERSION = "2026-11-18 · 4";   // shown at the bottom of the app
 const KEY = "podcast_radio_feed_url";
 const fm = FileManager.local();
 const DIR = fm.joinPath(fm.documentsDirectory(), "podcast-radio");
@@ -343,7 +343,7 @@ function page(D) {
       const dt = el("details"); dt.append(el("summary", null, title));
       const s = el("div", "sum"); summary(s, text); dt.append(s); wrap.append(dt);
     };
-    if (e.claude && e.local) fold("Résumé de Mistral", e.local);
+    if ((e.claude || e.summary) && e.local) fold("Résumé de Mistral", e.local);
     if (e.tracks) fold("Titres diffusés", e.tracks);
     d.append(wrap);
     d.hidden = false;
