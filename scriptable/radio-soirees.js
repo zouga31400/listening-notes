@@ -3,6 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
+const VERSION = "2026-11-18 · 6";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -279,11 +280,13 @@ a.cvl{display:block;flex:none}.grid a.cvl{width:100%}
 .hb{display:grid;grid-template-columns:100px 1fr 30px;gap:8px;align-items:center;font-size:14px;margin:8px 0}.hb .n{text-align:right;font-variant-numeric:tabular-nums}
 .hb .tr{height:10px;border-radius:5px;background:var(--line);overflow:hidden}.hb .tr i{display:block;height:100%;border-radius:5px;background:var(--accent)}
 .hb .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ver{color:var(--muted);font-size:12px;text-align:center;margin:28px 0 0}
 .empty{color:var(--muted);padding:28px 4px;text-align:center}
 </style></head><body>
 <h1>Radio Soirées</h1><p class="sub" id="sub"></p><div id="warn"></div>
 <div class="seg"><button data-tab="biblio" class="on">Bibliothèque</button><button data-tab="soiree">Soirée</button><button data-tab="stats">Stats</button><button data-tab="absents">Absents</button></div>
 <main id="main"></main>
+<p class="ver" id="ver"></p>
 <script>
 const D=${json};
 const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!=null)e.textContent=x;return e};
@@ -309,6 +312,7 @@ const groupLabel=(ev)=>{const d=dayDiff(ev);
   return String(y)};
 let cur=evs[0],tab='biblio',layout='list',query='';
 const nT=(ev)=>T.filter(r=>r.ev===ev).length;
+document.getElementById('ver').textContent='Version '+(D.version||'?');
 document.getElementById('sub').textContent=H.length?(T.length+' titres sur '+evs.length+' soirées'):'Aucune donnée';
 const W=document.getElementById('warn');
 if(D.ci&&!D.ci.ok){const w=el('div','warn bad','⚠️ La dernière exécution du workflow a échoué. ');const a=el('a',null,'Voir');a.href=D.ci.url;w.append(a);W.append(w)}
@@ -329,7 +333,8 @@ function card(r){
   if(r.genre||r.mood){const c=el('div','chips');if(r.genre)c.append(el('span','chip genre',r.genre));if(r.mood)c.append(el('span','chip '+r.mood,r.mood));m.append(c)}
   const acts=el('div','acts');
   if(list){const x=el('a',null,r.dayPlaylist?'▶ Playlist du jour':'▶ Playlist du mois');x.href=list;acts.append(x)}
-  if(r.link){const x=el('a',null,list?'Titre':'▶ Titre');x.href=r.link;acts.append(x)}
+  // The track link opens the album, like the Album button: only kept when there is no album link.
+  if(r.link&&!r.albumLink){const x=el('a',null,list?'Titre':'▶ Titre');x.href=r.link;acts.append(x)}
   if(r.albumLink){const x=el('a',null,'Album');x.href=r.albumLink;acts.append(x)}
   if(!r.link&&r.shazam){const x=el('a',null,'Shazam');x.href=r.shazam;acts.append(x)}
   {const x=el('a',null,'YouTube');x.href=r.youtube||('https://www.youtube.com/results?search_query='+encodeURIComponent(r.artist+' '+r.title));acts.append(x)}
@@ -381,6 +386,7 @@ async function app(data) {
     if (/^https?:/.test(u)) { Safari.open(u); return false; }
     return true;
   };
+  data.version = VERSION;
   await wv.loadHTML(html(data));
   await wv.present(true);
 }
