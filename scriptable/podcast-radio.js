@@ -7,7 +7,7 @@
 // open the episodes containing them).
 // Reset the address: run the script with the parameter reset=1.
 
-const VERSION = "2026-11-18 · 1";   // shown at the bottom of the app
+const VERSION = "2026-11-18 · 2";   // shown at the bottom of the app
 const KEY = "podcast_radio_feed_url";
 const fm = FileManager.local();
 const DIR = fm.joinPath(fm.documentsDirectory(), "podcast-radio");
@@ -184,7 +184,7 @@ async function loadData() {
     cover: coverUri(e.id),
   }));
   if (!episodes.length) { const e = new Error("empty"); e.code = 0; throw e; }
-  return {episodes, offline, at: archive.at || ""};
+  return {episodes, offline, at: archive.at || "", feedUrl: url};
 }
 
 // ---------- Page (runs in the web view: written as a function, injected as text) ----------
@@ -315,6 +315,16 @@ function page(D) {
     wrap.append(cover(e, "dcover"));
     wrap.append(el("h2", "dt", cap(fmt(e.date, {weekday: "long", day: "numeric", month: "long", year: "numeric"}))));
     wrap.append(el("div", "d", meta(e)));
+    if (e.available && D.feedUrl) {
+      // The podcast apps only open the show (no link to one episode): the latest ones are at the top.
+      const play = el("div", "play");
+      const a1 = el("a", "btn", "▶ Overcast");
+      a1.href = "overcast://x-callback-url/add?url=" + encodeURIComponent(D.feedUrl);
+      const a2 = el("a", "btn", "▶ Apple Podcasts");
+      a2.href = D.feedUrl.replace(/^https?:\/\//, "podcast://");
+      play.append(a1, a2);
+      wrap.append(play);
+    }
     if (!e.available) wrap.append(el("div", "warn", "L'audio n'est plus sur Drive : le résumé et les mots-clés sont conservés ici."));
     if (e.keywords.length) {
       wrap.append(el("h3", null, "Mots-clés"));
@@ -512,6 +522,7 @@ h2{font-size:21px;margin:22px 0 10px;letter-spacing:-.2px}h3{margin:18px 0 8px;f
 details{background:var(--card);border-radius:14px;padding:10px 14px;margin-top:12px}summary{font-weight:600}
 .ver{color:var(--muted);font-size:12px;text-align:center;margin:28px 0 0}.empty{color:var(--muted);padding:28px 4px;text-align:center}
 .tap{cursor:pointer}
+.play{display:flex;gap:10px;margin:14px 0 4px}.btn{flex:1;text-align:center;text-decoration:none;font-weight:600;font-size:15px;padding:11px 8px;border-radius:12px;background:var(--accent);color:#fff}
 `;
 
 function html(data) {
@@ -530,6 +541,12 @@ function html(data) {
 // ---------- App ----------
 async function app(data) {
   const wv = new WebView();
+  // Podcast app links (overcast:, podcast:) open outside the web view.
+  wv.shouldAllowRequest = (req) => {
+    const u = req.url || "";
+    if (/^(overcast|podcast|podcasts):/i.test(u)) { Safari.open(u); return false; }
+    return true;
+  };
   data.version = VERSION;
   await wv.loadHTML(html(data));
   await wv.present(true);
