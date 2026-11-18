@@ -332,6 +332,7 @@ function card(r){
   if(r.link){const x=el('a',null,list?'Titre':'▶ Titre');x.href=r.link;acts.append(x)}
   if(r.albumLink){const x=el('a',null,'Album');x.href=r.albumLink;acts.append(x)}
   if(!r.link&&r.shazam){const x=el('a',null,'Shazam');x.href=r.shazam;acts.append(x)}
+  {const x=el('a',null,'YouTube');x.href=r.youtube||('https://www.youtube.com/results?search_query='+encodeURIComponent(r.artist+' '+r.title));acts.append(x)}
   if(acts.children.length)m.append(acts);
   a.append(m);return a}
 function groups(rows){const g=new Map();for(const r of rows){const k=groupLabel(r.ev);if(!g.has(k))g.set(k,[]);g.get(k).push(r)}return g}
