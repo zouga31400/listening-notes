@@ -26,6 +26,7 @@ import time
 import requests
 
 import lists_sync as lq
+import playlist_cover as pc
 
 NOTION = "https://api.notion.com/v1"
 NOTION_VERSION = os.environ.get("NOTION_VERSION", "2022-06-28")
@@ -291,6 +292,14 @@ def report_blocks(name, result, bad, link):
     return blocks
 
 
+def theme_cover(name, film, entries, service):
+    """Cover for a playlist with no album art: film poster, main artist, genre or period."""
+    url, source = pc.find_cover(name, film=film or None, artists=[e[1] for e in entries],
+                                service=service)
+    lq.log(f"  No album art: {source} cover used.")
+    return url
+
+
 def handle(db, service, page):
     page_id = page["id"]
     name = db.title_of(page) or None
@@ -324,6 +333,8 @@ def handle(db, service, page):
         return True
     link = lq.web_link("playlist", result["playlist_id"])
     cover = next((r["cover"] for r in result["tracks"] if r.get("cover")), None)
+    if not cover:
+        cover = theme_cover(name, film, entries, service)
     db.finish(page_id, DONE, added=result["added"], missing=len(result["missing"]), link=link,
               blocks=report_blocks(name, result, bad, link), old_report=old_report, cover=cover)
     lq.notify_result(result, link=link or page.get("url"), page_url=page.get("url"))
@@ -360,15 +371,14 @@ def backfill_covers():
         link = ((page.get("properties") or {}).get("Link") or {}).get("url") or ""
         match = PLAYLIST_ID_RE.search(link)
         name = db.title_of(page)
-        if not match:
-            lq.log(f"  {name}: no playlist link, skipped.")
-            continue
         try:
-            items = service.playlist_tracks(match.group(1))
+            items = service.playlist_tracks(match.group(1)) if match else []
             cover = next((c for c in (lq.track_cover(t) for t in items) if c), None)
             if not cover:
-                lq.log(f"  {name}: no cover found in the playlist.")
-                continue
+                lines, _ = page_content(db.notion, page["id"])
+                lines, meta = lq.split_meta(lines)
+                _, entries, _ = lq.parse_lines(lines, name=name)
+                cover = theme_cover(name, db.film_of(page) or meta["film"], entries, service)
             db.notion.call("PATCH", f"/pages/{page['id']}", {
                 "cover": {"type": "external", "external": {"url": cover}},
                 "icon": {"type": "external", "external": {"url": cover}}})
