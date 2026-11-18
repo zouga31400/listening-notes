@@ -121,6 +121,7 @@ async function loadData() {
           year: prop(p.Year), decade: prop(p.Decade) || "", genre: prop(p.Genre) || "",
           mood: prop(p.Mood) || "", status: prop(p.Status) || "", link: prop(p.Link) || "",
           albumLink: prop(p["Album link"]) || "", position: prop(p.Track) || "",
+          dayPlaylist: prop(p["Day playlist"]) || "",
           shazam: prop(p.Shazam) || "", youtube: prop(p.YouTube) || "",
           cover: prop(p["Cover URL"]) || prop(p.Cover) || "",
         };
@@ -265,7 +266,7 @@ h2{font-size:21px;margin:22px 0 10px;letter-spacing:-.2px}
 .chips{display:flex;gap:6px;margin-top:3px;min-width:0}.chip{font-size:12px;padding:2px 9px;border-radius:99px;font-weight:600;white-space:nowrap;flex:none}
 .chip.genre{background:var(--seg);color:var(--muted);flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .Calme{background:var(--calme-bg);color:var(--calme)}.Groove{background:var(--groove-bg);color:var(--groove)}.Énergique{background:var(--ener-bg);color:var(--ener)}
-.acts{display:flex;gap:8px;margin-top:6px}.acts a{font-size:13px;font-weight:600;color:var(--accent);background:var(--seg);border-radius:99px;padding:5px 12px;text-decoration:none}
+.acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.acts a{font-size:13px;font-weight:600;color:var(--accent);background:var(--seg);border-radius:99px;padding:5px 12px;text-decoration:none}
 a.cvl{display:block;flex:none}.grid a.cvl{width:100%}
 .ex .t{font-style:italic;font-weight:600}.ex{opacity:.78}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid .card{flex-direction:column;align-items:stretch;gap:8px;padding:10px;margin:0;min-width:0}.grid .meta{width:100%}.grid .acts{flex-wrap:wrap}
@@ -315,7 +316,7 @@ if(D.offline)W.append(el('div','warn',D.offline));
 function dateLine(r){return new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',weekday:'short',day:'numeric',month:'short'}).format(r.d)+' à '+r.time}
 function card(r){
   const a=el('div','card'+(r.status==='Excerpt'?' ex':''));
-  const main=r.link||r.shazam||r.youtube||'';
+  const main=r.dayPlaylist||r.link||r.shazam||r.youtube||'';
   let img;if(r.cover){img=el('img','cover');img.loading='lazy';img.alt='';img.src=r.cover}else img=el('div','cover');
   if(main){const l=el('a','cvl');l.href=main;l.append(img);a.append(l)}else a.append(img);
   const m=el('div','meta');m.append(el('div','t',r.title),el('div','a',r.artist));
@@ -324,7 +325,8 @@ function card(r){
   const extra=[r.status==='Excerpt'?'Extrait court':'',alb,r.position].filter(Boolean).join(' · ');if(extra)m.append(el('div','d',extra));
   if(r.genre||r.mood){const c=el('div','chips');if(r.genre)c.append(el('span','chip genre',r.genre));if(r.mood)c.append(el('span','chip '+r.mood,r.mood));m.append(c)}
   const acts=el('div','acts');
-  if(r.link){const x=el('a',null,'▶ Titre');x.href=r.link;acts.append(x)}
+  if(r.dayPlaylist){const x=el('a',null,'▶ Playlist du jour');x.href=r.dayPlaylist;acts.append(x)}
+  if(r.link){const x=el('a',null,r.dayPlaylist?'Titre':'▶ Titre');x.href=r.link;acts.append(x)}
   if(r.albumLink){const x=el('a',null,'Album');x.href=r.albumLink;acts.append(x)}
   if(!r.link&&r.shazam){const x=el('a',null,'Shazam');x.href=r.shazam;acts.append(x)}
   if(acts.children.length)m.append(acts);

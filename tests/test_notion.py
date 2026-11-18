@@ -53,7 +53,7 @@ class NotionWrites(unittest.TestCase):
                                side_effect=lambda url, **k: sent.update(k["json"]) or Response()):
             self.db.check(r.HISTORY_PROPERTIES)
         self.assertEqual(set(sent["properties"]), {"Link", "YouTube", "Cover", "Start time", "Cover URL",
-                                                         "Album link", "Track"})
+                                                         "Album link", "Track", "Day playlist"})
         self.assertIn("Link", self.db.properties)
 
     def test_check_survives_refused_schema_change(self):
@@ -106,6 +106,23 @@ class NotionWrites(unittest.TestCase):
         props = bodies[0]["properties"]
         self.assertEqual(props["Album link"]["url"], "https://web/album/9")
         self.assertEqual(props["Track"]["rich_text"][0]["text"]["content"], "Piste 7/12")
+
+    def test_history_has_day_playlist_link(self):
+        self.db.properties = {"Title", "Artist", "Played at", "Status", "Day playlist"}
+        bodies = []
+        with mock.patch.object(r.requests, "post",
+                               side_effect=lambda url, **k: bodies.append(k["json"]) or Response()):
+            self.db.add_history("Artist", "Song", datetime(2026, 11, 11, 21, 0), "Added",
+                                "", 0, "", {}, day_playlist="https://web/playlist/5")
+        self.assertEqual(bodies[0]["properties"]["Day playlist"]["url"], "https://web/playlist/5")
+        with mock.patch.dict(r.os.environ, {"MUSIC_WEB_URL": "https://web"}):
+            self.assertEqual(r.playlist_link(5), "https://web/playlist/5")
+            self.assertEqual(r.playlist_link(None), "")
+
+    def test_backfill_evening_date(self):
+        import notion_backfill as b
+        self.assertEqual(b.evening_date("2026-11-17T00:54:00.000+01:00"), "2026-11-16")
+        self.assertEqual(b.evening_date("2026-11-16T20:00:37.000Z"), "2026-11-16")
 
     def test_album_link_and_track_position(self):
         match = {"track_number": 7, "media_number": 1, "album": {"id": "abc123", "tracks_count": 12}}
