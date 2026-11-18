@@ -57,14 +57,17 @@ class Backfill(unittest.TestCase):
         code, notion, service = self.run_backfill([
             page(1, "Rock", "https://play.example/playlist/1"),
             page(2, "No art", "https://play.example/playlist/2"),
-            page(3, "No link", ""),
+            page(3, "Soul classics", ""),
             page(4, "Has cover", "https://play.example/playlist/4", cover={"type": "external"})])
         self.assertEqual(code, 0)
-        self.assertEqual(service.asked, ["1", "2"])     # no cover to find for 2; 3 and 4 skipped
-        self.assertEqual([p for p, _ in notion.patched], ["/pages/p1"])
+        self.assertEqual(service.asked, ["1", "2"])     # 3 has no link, 4 already has a cover
+        self.assertEqual([p for p, _ in notion.patched], ["/pages/p1", "/pages/p2", "/pages/p3"])
         body = notion.patched[0][1]
         self.assertEqual(body["cover"]["external"]["url"], "https://img/a.jpg")
         self.assertEqual(body["icon"]["external"]["url"], "https://img/a.jpg")
+        # No album art: the theme cover (the title says "Rock", nothing for the others).
+        self.assertTrue(notion.patched[1][1]["cover"]["external"]["url"].endswith("/covers/musique.png"))
+        self.assertTrue(notion.patched[2][1]["cover"]["external"]["url"].endswith("/covers/soul.png"))
 
     def test_nothing_to_do_does_not_log_in(self):
         code, notion, service = self.run_backfill(
