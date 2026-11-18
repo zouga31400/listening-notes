@@ -7,6 +7,7 @@ MUSIC_WEB_URL. Nothing about the tracks is printed (public log): only counts.
 """
 import re
 import time
+from datetime import datetime, timedelta
 
 import requests
 
@@ -36,7 +37,15 @@ def pages(db):
         cursor = data.get("next_cursor")
 
 
-def backfill(db, service, counts):
+def evening_date(start):
+    """Date of the show evening of a play time (an evening runs until 6 a.m., Paris time)."""
+    when = datetime.fromisoformat(start.replace("Z", "+00:00"))
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=r.PARIS)
+    return (when.astimezone(r.PARIS) - timedelta(hours=6)).strftime("%Y-%m-%d")
+
+
+def backfill(db, service, counts, daily_ids=None, pattern=""):
     for page in pages(db):
         props = page.get("properties") or {}
         title, artist = plain(props.get("Title")), plain(props.get("Artist"))
@@ -85,6 +94,17 @@ def backfill(db, service, counts):
                 except Exception:
                     counts["errors"] += 1
 
+        # Link of the daily playlist of that evening, while that playlist still exists.
+        started = ((props.get("Played at") or {}).get("date") or {}).get("start")
+        if (daily_ids and pattern and started and "Day playlist" in db.properties
+                and not (props.get("Day playlist") or {}).get("url")):
+            try:
+                name = pattern.replace("{date}", evening_date(started)).strip().lower()
+                if daily_ids.get(name):
+                    update["Day playlist"] = {"url": r.playlist_link(daily_ids[name])}
+            except Exception:
+                counts["errors"] += 1
+
         update = {k: v for k, v in update.items() if k in db.properties}
         body = {}
         if update:
@@ -127,7 +147,11 @@ def main():
         db.check(wanted)
         counts = {"matched": 0, "updated": 0, "covers": 0, "errors": 0}
         # Missing tracks are not on the service: only decade and YouTube for them.
-        backfill(db, service if key == "notion_history_db" else None, counts)
+        daily_ids = None
+        if key == "notion_history_db" and service:
+            daily_ids = {p["name"].strip().lower(): p["id"] for p in service.list_playlists()}
+        backfill(db, service if key == "notion_history_db" else None, counts,
+                 daily_ids, config.get("daily_playlist", ""))
         print(f"Notion {label}: {counts['updated']} page(s) completed, {counts['covers']} "
               f"cover(s), {counts['matched']} found on the service, {counts['errors']} error(s)",
               flush=True)
