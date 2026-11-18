@@ -52,7 +52,8 @@ class NotionWrites(unittest.TestCase):
              mock.patch.object(r.requests, "patch",
                                side_effect=lambda url, **k: sent.update(k["json"]) or Response()):
             self.db.check(r.HISTORY_PROPERTIES)
-        self.assertEqual(set(sent["properties"]), {"Link", "YouTube", "Cover", "Start time", "Cover URL"})
+        self.assertEqual(set(sent["properties"]), {"Link", "YouTube", "Cover", "Start time", "Cover URL",
+                                                         "Album link", "Track"})
         self.assertIn("Link", self.db.properties)
 
     def test_check_survives_refused_schema_change(self):
@@ -93,6 +94,30 @@ class NotionWrites(unittest.TestCase):
         self.assertEqual(props["Start time"]["rich_text"][0]["text"]["content"],
                          "2026-11-11T21:00:37")
         self.assertEqual(props["Cover URL"]["url"], "https://img/c.jpg")
+
+    def test_history_has_album_link_and_track_position(self):
+        self.db.properties = {"Title", "Artist", "Played at", "Status", "Album link", "Track"}
+        bodies = []
+        with mock.patch.object(r.requests, "post",
+                               side_effect=lambda url, **k: bodies.append(k["json"]) or Response()):
+            self.db.add_history("Artist", "Song", datetime(2026, 11, 11, 21, 0), "Added",
+                                "", 0, "", {}, album_url="https://web/album/9",
+                                position="Piste 7/12")
+        props = bodies[0]["properties"]
+        self.assertEqual(props["Album link"]["url"], "https://web/album/9")
+        self.assertEqual(props["Track"]["rich_text"][0]["text"]["content"], "Piste 7/12")
+
+    def test_album_link_and_track_position(self):
+        match = {"track_number": 7, "media_number": 1, "album": {"id": "abc123", "tracks_count": 12}}
+        with mock.patch.dict(r.os.environ, {"MUSIC_WEB_URL": "https://web/"}):
+            self.assertEqual(r.album_link(match), "https://web/album/abc123")
+            self.assertEqual(r.album_link({}), "")
+        self.assertEqual(r.track_position(match), "Piste 7/12")
+        match["media_number"] = 2
+        self.assertEqual(r.track_position(match), "CD2 · piste 7")
+        self.assertEqual(r.track_position({"track_number": 3, "album": {}}), "Piste 3")
+        self.assertEqual(r.track_position({}), "")
+        self.assertEqual(r.track_position(None), "")
 
     def test_missing_page_has_youtube_and_details(self):
         self.db.properties = set(r.MISSING_PROPERTIES) | {"Title", "Artist", "Date", "Shazam"}

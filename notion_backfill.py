@@ -5,6 +5,7 @@ year, genre and decade. Pages that already have a link and a cover are left as t
 Secrets: NOTION_TOKEN, MUSIC_EMAIL, MUSIC_PASSWORD, MUSIC_API_URL, MUSIC_APP_ID,
 MUSIC_WEB_URL. Nothing about the tracks is printed (public log): only counts.
 """
+import re
 import time
 
 import requests
@@ -68,6 +69,21 @@ def backfill(db, service, counts):
             update["Decade"] = {"select": {"name": r.decade_label(int(year))}}
         if not (props.get("YouTube") or {}).get("url"):
             update["YouTube"] = {"url": r.youtube_link(artist, title)}
+
+        # Album link and place of the track in its album, from the track already linked.
+        link_url = (props.get("Link") or {}).get("url") or (update.get("Link") or {}).get("url") or ""
+        if (service and "Album link" in db.properties and link_url
+                and not (props.get("Album link") or {}).get("url")):
+            found = re.search(r"/track/(\d+)", link_url)
+            if found:
+                try:
+                    full = service.call("GET", "/track/get", track_id=found.group(1))
+                    if r.album_link(full):
+                        update["Album link"] = {"url": r.album_link(full)}
+                    if r.track_position(full) and not plain(props.get("Track")):
+                        update["Track"] = r.text_prop(r.track_position(full))
+                except Exception:
+                    counts["errors"] += 1
 
         update = {k: v for k, v in update.items() if k in db.properties}
         body = {}
