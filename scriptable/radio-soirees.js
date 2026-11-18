@@ -300,6 +300,7 @@ const groupLabel=(ev)=>{const d=dayDiff(ev);
   if(d<=13)return 'La semaine dernière';
   const y=+ev.slice(0,4),m=+ev.slice(5,7),ty=+todayEv.slice(0,4),tm=+todayEv.slice(5,7);
   if(y*12+m===ty*12+tm-1)return 'Le mois dernier';
+  if(y===ty&&m===tm)return 'Mois en cours';
   if(y===ty)return monthName(ev);
   return String(y)};
 let cur=evs[0],tab='biblio',layout='list',query='';
