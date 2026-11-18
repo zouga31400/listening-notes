@@ -1,0 +1,9 @@
+[Unit]
+Description=Update the radio listening code every morning (outside the show)
+
+[Timer]
+OnCalendar=*-*-* 05:10:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

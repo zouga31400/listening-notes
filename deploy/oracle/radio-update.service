@@ -1,0 +1,6 @@
+[Unit]
+Description=Update the radio listening code from GitHub
+
+[Service]
+Type=oneshot
+ExecStart=/opt/listening-notes/app/deploy/oracle/update.sh
