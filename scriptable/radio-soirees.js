@@ -316,7 +316,9 @@ if(D.offline)W.append(el('div','warn',D.offline));
 function dateLine(r){return new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',weekday:'short',day:'numeric',month:'short'}).format(r.d)+' à '+r.time}
 function card(r){
   const a=el('div','card'+(r.status==='Excerpt'?' ex':''));
-  const list=r.dayPlaylist||r.monthPlaylist;  // the daily playlist, else the monthly one
+  // Track not on the music service: no playlist button. Otherwise the daily playlist, else the monthly one.
+  const onService=!!r.link&&r.status!=='Not found'&&r.status!=='Not on Qobuz';
+  const list=onService?(r.dayPlaylist||r.monthPlaylist):'';
   const main=list||r.link||r.shazam||r.youtube||'';
   let img;if(r.cover){img=el('img','cover');img.loading='lazy';img.alt='';img.src=r.cover}else img=el('div','cover');
   if(main){const l=el('a','cvl');l.href=main;l.append(img);a.append(l)}else a.append(img);
