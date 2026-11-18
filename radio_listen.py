@@ -673,6 +673,28 @@ def track_link(match):
     return f"{web}/track/{match['id']}" if web and match and match.get("id") else ""
 
 
+def album_link(match):
+    """Web link of the album of the track on the service (MUSIC_WEB_URL secret), or ""."""
+    web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
+    album_id = ((match or {}).get("album") or {}).get("id")
+    return f"{web}/album/{album_id}" if web and album_id else ""
+
+
+def track_position(match):
+    """Place of the track in its album: "Piste 7/12", "CD2 · piste 5" or ""."""
+    try:
+        number = int((match or {}).get("track_number") or 0)
+        disc = int((match or {}).get("media_number") or 1)
+        total = int(((match or {}).get("album") or {}).get("tracks_count") or 0)
+    except (TypeError, ValueError):
+        return ""
+    if number <= 0:
+        return ""
+    if disc > 1:
+        return f"CD{disc} · piste {number}"
+    return f"Piste {number}/{total}" if total >= number else f"Piste {number}"
+
+
 def youtube_link(artist, title):
     return "https://www.youtube.com/results?search_query=" + quote_plus(f"{artist} {title}")
 
@@ -681,7 +703,8 @@ def youtube_link(artist, title):
 # right to edit the database; otherwise these values are simply left out).
 HISTORY_PROPERTIES = {"Decade": {"select": {}}, "Link": {"url": {}}, "YouTube": {"url": {}},
                       "Cover": {"files": {}}, "Start time": {"rich_text": {}},
-                      "Cover URL": {"url": {}}}
+                      "Cover URL": {"url": {}}, "Album link": {"url": {}},
+                      "Track": {"rich_text": {}}}
 MISSING_PROPERTIES = {"YouTube": {"url": {}}, "Album": {"rich_text": {}},
                       "Year": {"number": {}}, "Decade": {"select": {}}, "Genre": {"rich_text": {}},
                       "Cover": {"files": {}}}
@@ -744,7 +767,7 @@ class Notion:
         return len(r.json().get("results", []))
 
     def add_history(self, artist, title, when, status, album, duration, shazam_url, info=None,
-                    cover="", link=""):
+                    cover="", link="", album_url="", position=""):
         info = info or {}
         props = {
             "Title": {"title": [{"text": {"content": (title or "?")[:2000]}}]},
@@ -768,6 +791,10 @@ class Notion:
             props["Decade"] = {"select": {"name": decade_label(info["year"])}}
         if link:
             props["Link"] = {"url": link}
+        if album_url:
+            props["Album link"] = {"url": album_url}
+        if position:
+            props["Track"] = text_prop(position)
         props["YouTube"] = {"url": youtube_link(artist, title)}
         for key, prop in (("bpm", "BPM"), ("energy", "Energy")):
             if info.get(key) is not None:
@@ -1217,7 +1244,7 @@ async def main():
                                     or shazam_meta(track, "Album"),
                                     (match or {}).get("duration"), track.get("url"),
                                     track_info(match, track), cover_url(match, track),
-                                    track_link(match))
+                                    track_link(match), album_link(match), track_position(match))
                 logged += 1
             except Exception as e:
                 log(f"   Notion history failure ({type(e).__name__})")
@@ -1321,7 +1348,8 @@ async def main():
             try:
                 history.add_history(artist, title, song_start, status, album_name,
                                     duration, track.get("url"), info,
-                                    cover_url(match, track), track_link(match))
+                                    cover_url(match, track), track_link(match),
+                                    album_link(match), track_position(match))
                 logged += 1
             except Exception as e:
                 log(f"   Notion history failure ({type(e).__name__})")
