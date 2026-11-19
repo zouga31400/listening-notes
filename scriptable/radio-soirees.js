@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-18 · 7";   // shown at the bottom of the app
+const VERSION = "2026-11-19 · 8";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -119,7 +119,7 @@ async function loadData() {
         return {
           id: pg.id, start: prop(p["Start time"]) || prop(p["Played at"]),
           title: prop(p.Title) || "", artist: prop(p.Artist) || "", album: prop(p.Album) || "",
-          year: prop(p.Year), decade: prop(p.Decade) || "", genre: prop(p.Genre) || "",
+          year: prop(p.Year), duration: prop(p["Duration (s)"]) || 0, decade: prop(p.Decade) || "", genre: prop(p.Genre) || "",
           mood: prop(p.Mood) || "", status: prop(p.Status) || "", link: prop(p.Link) || "",
           albumLink: prop(p["Album link"]) || "", position: prop(p.Track) || "",
           dayPlaylist: prop(p["Day playlist"]) || "", monthPlaylist: prop(p["Month playlist"]) || "",
@@ -281,6 +281,10 @@ a.cvl{display:block;flex:none}.grid a.cvl{width:100%}
 .hb{display:grid;grid-template-columns:100px 1fr 30px;gap:8px;align-items:center;font-size:14px;margin:8px 0}.hb .n{text-align:right;font-variant-numeric:tabular-nums}
 .hb .tr{height:10px;border-radius:5px;background:var(--line);overflow:hidden}.hb .tr i{display:block;height:100%;border-radius:5px;background:var(--accent)}
 .hb .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.avg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px}.avg b{display:block;font-size:21px;font-variant-numeric:tabular-nums}.avg span{font-size:12px;color:var(--muted)}
+.tl{display:grid;grid-template-columns:76px 1fr 98px;gap:8px;align-items:center;font-size:13px;margin:8px 0}.tl .rg{position:relative;height:10px;border-radius:5px;background:var(--line)}
+.tl .rg i{position:absolute;top:0;bottom:0;border-radius:5px;background:var(--accent)}.tl .tm{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}.tl.tap{cursor:pointer}
+.axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin:0 98px 0 84px}.note{font-size:12px;color:var(--muted);margin:10px 0 0}
 .ver{color:var(--muted);font-size:12px;text-align:center;margin:28px 0 0}
 .empty{color:var(--muted);padding:28px 4px;text-align:center}
 </style></head><body>
@@ -362,6 +366,22 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     kpi(T.length,'titres retenus');kpi(evs.length,'soirées');kpi(new Set(T.map(r=>r.artist.toLowerCase())).size,'artistes');kpi(D.missing.length,'absents du service');M.append(k);
     const c=el('div','box');c.append(el('h3',null,'Titres par soirée'));const cols=el('div','cols');const last=evs.slice(0,14).reverse();const mx=Math.max(1,...last.map(nT));
     for(const e of last){const d=el('div');const i=el('i');i.style.height=(85*nT(e)/mx)+'%';d.append(el('em',null,String(nT(e))),i,el('span',null,fmtEv(e,{day:'2-digit',month:'2-digit'})));d.onclick=()=>{cur=e;tab='soiree';setTab()};cols.append(d)}c.append(cols);M.append(c);
+    // Detected start and end of the show, per evening: first track kept (the show starts with it)
+    // and end of the last track kept (the tracks after the detected end are not kept).
+    const mOf=(d)=>{const q=pp(d);let m=(+q.hour)*60+(+q.minute);if(m<720)m+=1440;return m};
+    const hh=(m)=>{const x=((Math.round(m)%1440)+1440)%1440;return String(Math.floor(x/60)).padStart(2,'0')+'h'+String(x%60).padStart(2,'0')};
+    const spans=evs.map(ev=>{const r=H.filter(x=>x.ev===ev);if(r.length<3)return null;const a=r[0],b=r[r.length-1];
+      const endD=new Date(b.d.getTime()+(b.duration||0)*1000);const s=mOf(a.d);return {ev,s,e:Math.max(mOf(endD),s),live:ev===todayEv&&Date.now()-endD.getTime()<1500000}}).filter(Boolean);
+    if(spans.length){const done=spans.filter(x=>!x.live);const avg=(f)=>done.reduce((t,x)=>t+f(x),0)/Math.max(1,done.length);
+      const hb=el('div','box');hb.append(el('h3',null,'Horaires détectés'));
+      if(done.length){const a=el('div','avg');const av=(v,l)=>{const d=el('div');d.append(el('b',null,v),el('span',null,l));a.append(d)};
+        const dm=avg(x=>x.e-x.s);av(hh(avg(x=>x.s)),'début moyen');av(hh(avg(x=>x.e)),'fin moyenne');av(Math.floor(dm/60)+' h '+String(Math.round(dm%60)).padStart(2,'0'),'durée moyenne');hb.append(a)}
+      const shown=spans.slice(0,14);const lo=Math.floor(Math.min(...shown.map(x=>x.s))/30)*30,hi=Math.ceil(Math.max(...shown.map(x=>x.e))/30)*30;
+      const ax=el('div','axis');ax.append(el('span',null,hh(lo)),el('span',null,hh(hi)));hb.append(ax);
+      for(const x of shown){const t=el('div','tl tap');const rg=el('div','rg');const i=el('i');i.style.left=(100*(x.s-lo)/(hi-lo))+'%';i.style.width=Math.max(1.5,100*(x.e-x.s)/(hi-lo))+'%';rg.append(i);
+        t.append(el('span',null,fmtEv(x.ev,{weekday:'short',day:'numeric',month:'short'})),rg,el('span','tm',hh(x.s)+'–'+(x.live?'…':hh(x.e))));
+        t.onclick=()=>{cur=x.ev;tab='soiree';setTab()};hb.append(t)}
+      hb.append(el('p','note','Début : premier titre de l\\'émission. Fin : fin du dernier titre avant la détection de fin.'));M.append(hb)}
     const mc={Calme:'var(--calme)',Groove:'var(--groove)','Énergique':'var(--ener)'};
     M.append(bars('Ambiances',['Calme','Groove','Énergique'].map(x=>[x,T.filter(r=>r.mood===x).length]),k=>mc[k]));
     M.append(bars('Décennies',count(T,r=>r.decade).sort((a,b)=>parseInt(a[0])-parseInt(b[0]))));
