@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-19 · 10";   // shown at the bottom of the app
+const VERSION = "2026-11-19 · 11";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -387,8 +387,8 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     // and end of the last track kept (the tracks after the detected end are not kept).
     const mOf=(d)=>{const q=pp(d);let m=(+q.hour)*60+(+q.minute);if(m<720)m+=1440;return m};
     // Tracks played outside the show (tests in the daytime...) are ignored for the estimated times:
-    // the show is between 20h00 and 02h30.
-    const inShow=(d)=>{const m=mOf(d);return m>=1200&&m<=1590};
+    // the show is between 21h00 (music before it is ignored too) and 02h30.
+    const inShow=(d)=>{const m=mOf(d);return m>=1260&&m<=1590};
     const hh=(m)=>{const x=((Math.round(m)%1440)+1440)%1440;return String(Math.floor(x/60)).padStart(2,'0')+'h'+String(x%60).padStart(2,'0')};
     const allEv=[...new Set([...evs,...SH.keys()])].sort().reverse();
     const spans=allEv.map(ev=>{const sh=SH.get(ev);
