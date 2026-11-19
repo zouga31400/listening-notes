@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-19 · 12";   // shown at the bottom of the app
+const VERSION = "2026-11-19 · 13";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -129,6 +129,7 @@ async function loadData() {
           title: prop(p.Title) || "", artist: prop(p.Artist) || "", album: prop(p.Album) || "",
           year: prop(p.Year), duration: prop(p["Duration (s)"]) || 0, decade: prop(p.Decade) || "", genre: prop(p.Genre) || "",
           mood: prop(p.Mood) || "", status: prop(p.Status) || "", link: prop(p.Link) || "",
+          label: prop(p.Label) || "", country: prop(p.Country) || "",
           albumLink: prop(p["Album link"]) || "", position: prop(p.Track) || "",
           dayPlaylist: prop(p["Day playlist"]) || "", monthPlaylist: prop(p["Month playlist"]) || "",
           shazam: prop(p.Shazam) || "", youtube: prop(p.YouTube) || "",
@@ -294,6 +295,7 @@ a.cvl{display:block;flex:none}.grid a.cvl{width:100%}
 .tl .rg i{position:absolute;top:0;bottom:0;border-radius:5px;background:var(--accent)}.tl .tm{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}.tl.tap{cursor:pointer}
 .axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin:0 98px 0 84px}.note{font-size:12px;color:var(--muted);margin:10px 0 0}
 .shrow{display:flex;justify-content:space-between;font-size:15px;margin:6px 0}.shrow span{color:var(--muted)}.shrow b{font-variant-numeric:tabular-nums}
+.box .note{margin:8px 0 0;font-size:12px;color:var(--muted)}
 .ver{color:var(--muted);font-size:12px;text-align:center;margin:28px 0 0}
 .empty{color:var(--muted);padding:28px 4px;text-align:center}
 </style></head><body>
@@ -366,8 +368,8 @@ function card(r){
   if(acts.children.length)m.append(acts);
   a.append(m);return a}
 function groups(rows){const g=new Map();for(const r of rows){const k=groupLabel(r.ev);if(!g.has(k))g.set(k,[]);g.get(k).push(r)}return g}
-function bars(title,items,color){const c=el('div','box');c.append(el('h3',null,title));const mx=Math.max(1,...items.map(x=>x[1]));
-  for(const [k,v] of items){const b=el('div','hb');const tr=el('div','tr');const i=el('i');i.style.width=(100*v/mx)+'%';if(color)i.style.background=color(k);tr.append(i);b.append(el('span','name',k),tr,el('span','n',String(v)));c.append(b)}return c}
+function bars(title,items,color,note){const c=el('div','box');c.append(el('h3',null,title));if(!items.length)c.append(el('p','note','Aucune donnée.'));const mx=Math.max(1,...items.map(x=>x[1]));
+  for(const [k,v] of items){const b=el('div','hb');const tr=el('div','tr');const i=el('i');i.style.width=(100*v/mx)+'%';if(color)i.style.background=color(k);tr.append(i);b.append(el('span','name',k),tr,el('span','n',String(v)));c.append(b)}if(note)c.append(el('p','note',note));return c}
 const count=(arr,f)=>{const m=new Map();for(const r of arr){const k=f(r);if(k)m.set(k,(m.get(k)||0)+1)}return [...m]};
 function render(){const M=document.getElementById('main');M.replaceChildren();
   if(tab==='biblio'){
@@ -420,7 +422,11 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     M.append(bars('Ambiances',['Calme','Groove','Énergique'].map(x=>[x,T.filter(r=>r.mood===x).length]),k=>mc[k]));
     M.append(bars('Décennies',count(T,r=>r.decade).sort((a,b)=>parseInt(a[0])-parseInt(b[0]))));
     M.append(bars('Artistes les plus diffusés',count(T,r=>r.artist).sort((a,b)=>b[1]-a[1]).slice(0,8)));
-    M.append(bars('Genres',count(T,r=>r.genre).sort((a,b)=>b[1]-a[1]).slice(0,8)))}
+    M.append(bars('Genres',count(T,r=>r.genre).sort((a,b)=>b[1]-a[1]).slice(0,8)));
+    const top=(f)=>count(T,f).sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,10);
+    const unk=(f)=>{const n=T.filter(r=>!f(r)).length;return n?n+' titre'+(n>1?'s':'')+' sans information.':''};
+    M.append(bars('Labels (maisons de disques)',top(r=>r.label),null,unk(r=>r.label)));
+    M.append(bars('Pays des artistes',top(r=>r.country),null,unk(r=>r.country)))}
   if(tab==='absents'){if(!A.length){M.append(el('div','empty','Aucun titre absent.'));return}
     for(const [label,items] of groups(A)){M.append(el('h2',null,label));for(const r of items)M.append(card(r))}}}
 function setTab(){document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));render();window.scrollTo(0,0)}
