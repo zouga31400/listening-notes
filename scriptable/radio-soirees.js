@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-19 · 11";   // shown at the bottom of the app
+const VERSION = "2026-11-19 · 12";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -139,7 +139,7 @@ async function loadData() {
         const p = pg.properties;
         return {id: pg.id, date: prop(p.Date) || "", title: prop(p.Title) || "", artist: prop(p.Artist) || "",
                 album: prop(p.Album) || "", year: prop(p.Year), shazam: prop(p.Shazam) || "",
-                youtube: prop(p.YouTube) || ""};
+                youtube: prop(p.YouTube) || "", cover: prop(p.Cover) || "", genre: prop(p.Genre) || ""};
       });
       const ci = await ciStatus();
       notifyFailure(ci);
@@ -310,6 +310,15 @@ const U=(s)=>new Date(s+'T12:00:00Z');
 const fmtEv=(s,o)=>new Intl.DateTimeFormat('fr-FR',Object.assign({timeZone:'UTC'},o||{weekday:'long',day:'numeric',month:'long'})).format(U(s));
 const H=D.history.map(r=>{const d=new Date(r.start);const p=pp(d);return Object.assign({},r,{d,ev:evOf(d),time:p.hour+'h'+p.minute})}).sort((a,b)=>a.d-b.d);
 const T=H.filter(r=>r.status!=='Excerpt');
+// Tracks absent from the music service: the "missing" database, with the detection time (and cover, mood)
+// taken from the matching history row when there is one.
+const nk=(x)=>(x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+const hk=new Map();for(const r of H)if(!r.link||r.status==='Not found'||r.status==='Not on Qobuz')hk.set(nk(r.artist)+'|'+nk(r.title),r);
+const A=D.missing.filter(x=>x.title).map(x=>{const h=hk.get(nk(x.artist)+'|'+nk(x.title));
+  const day=(x.date||'').slice(0,10);
+  if(h)return Object.assign({},h,{cover:x.cover||h.cover,album:x.album||h.album,year:x.year||h.year,genre:x.genre||h.genre,shazam:x.shazam||h.shazam,youtube:x.youtube||h.youtube,link:'',albumLink:'',dayPlaylist:'',monthPlaylist:'',status:'Not found'});
+  const d=day?new Date(day+'T12:00:00Z'):new Date(0);
+  return Object.assign({},x,{d,ev:day||'1970-01-01',noTime:true,link:'',status:'Not found',mood:'',position:''})}).sort((a,b)=>b.d-a.d);
 const evs=[...new Set(H.map(r=>r.ev))].sort().reverse();
 const todayEv=evOf(new Date());
 const SH=new Map((D.shows||[]).map(x=>[x.date.slice(0,10),x]));
@@ -333,7 +342,7 @@ document.getElementById('sub').textContent=H.length?(T.length+' titres sur '+evs
 const W=document.getElementById('warn');
 if(D.ci&&!D.ci.ok){const w=el('div','warn bad','⚠️ La dernière exécution du workflow a échoué. ');const a=el('a',null,'Voir');a.href=D.ci.url;w.append(a);W.append(w)}
 if(D.offline)W.append(el('div','warn',D.offline));
-function dateLine(r){return new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',weekday:'short',day:'numeric',month:'short'}).format(r.d)+' à '+r.time}
+function dateLine(r){const x=new Intl.DateTimeFormat('fr-FR',{timeZone:r.noTime?'UTC':'Europe/Paris',weekday:'short',day:'numeric',month:'short'}).format(r.d);return r.noTime?x:x+' à '+r.time}
 function card(r){
   const a=el('div','card'+(r.status==='Excerpt'?' ex':''));
   // Track not on the music service: no playlist button. Otherwise the daily playlist, else the monthly one.
@@ -412,9 +421,8 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     M.append(bars('Décennies',count(T,r=>r.decade).sort((a,b)=>parseInt(a[0])-parseInt(b[0]))));
     M.append(bars('Artistes les plus diffusés',count(T,r=>r.artist).sort((a,b)=>b[1]-a[1]).slice(0,8)));
     M.append(bars('Genres',count(T,r=>r.genre).sort((a,b)=>b[1]-a[1]).slice(0,8)))}
-  if(tab==='absents'){if(!D.missing.length){M.append(el('div','empty','Aucun titre absent.'));return}
-    for(const r of D.missing){const a=el('a','card');a.href=r.youtube||r.shazam||'#';const m=el('div','meta');m.append(el('div','t',r.title),el('div','a',r.artist));
-      const d=[r.date?fmtEv(r.date.slice(0,10),{day:'numeric',month:'short'}):'',r.album,r.year].filter(Boolean).join(' · ');if(d)m.append(el('div','d',d));a.append(m);M.append(a)}}}
+  if(tab==='absents'){if(!A.length){M.append(el('div','empty','Aucun titre absent.'));return}
+    for(const [label,items] of groups(A)){M.append(el('h2',null,label));for(const r of items)M.append(card(r))}}}
 function setTab(){document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));render();window.scrollTo(0,0)}
 document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;setTab()});
 render();
