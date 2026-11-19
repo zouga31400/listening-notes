@@ -717,6 +717,15 @@ MISSING_PROPERTIES = {"YouTube": {"url": {}}, "Album": {"rich_text": {}},
                       "Cover": {"files": {}}}
 
 
+# "Radio - Soirées" database (notion_shows_db): one row per evening with the show start and end
+# found by the detectors. Times are ISO text with seconds (Notion dates keep the minute only).
+SHOWS_PROPERTIES = {"Date": {"date": {}}, "Start": {"rich_text": {}},
+                    "Start detected": {"rich_text": {}}, "End": {"rich_text": {}},
+                    "End detected": {"rich_text": {}},
+                    "End source": {"select": {"options": [{"name": "Detected", "color": "green"},
+                                                          {"name": "Time limit", "color": "gray"}]}}}
+
+
 def cover_prop(url):
     """Files property holding the album cover (shown on gallery cards)."""
     return {"files": [{"name": "cover", "type": "external", "external": {"url": url}}]}
@@ -760,6 +769,46 @@ class Notion:
         if cover:
             body["cover"] = {"type": "external", "external": {"url": cover}}
         r = requests.post(f"{NOTION_API}/pages", headers=self.headers, timeout=20, json=body)
+        r.raise_for_status()
+
+    def add_show(self, day, begin, detected=None):
+        """Row of the evening `day` with the show start (`begin`: estimated start of the
+        show; `detected`: the moment the detector noticed it). An existing row of the
+        same evening is kept as it is (the job may have been restarted). Returns its id."""
+        query = {"page_size": 1, "filter": {"property": "Date",
+                                            "date": {"equals": f"{day:%Y-%m-%d}"}}}
+        r = requests.post(f"{NOTION_API}/databases/{self.database_id}/query",
+                          json=query, headers=self.headers, timeout=20)
+        r.raise_for_status()
+        found = r.json().get("results", [])
+        if found:
+            return found[0]["id"]
+        props = {"Title": {"title": [{"text": {"content": f"{day:%Y-%m-%d}"}}]},
+                 "Date": {"date": {"start": f"{day:%Y-%m-%d}"}},
+                 "Start": text_prop(begin.isoformat(timespec="seconds"))}
+        if detected:
+            props["Start detected"] = text_prop(detected.isoformat(timespec="seconds"))
+        known = getattr(self, "properties", None)
+        if known:
+            props = {k: v for k, v in props.items() if k in known}
+        r = requests.post(f"{NOTION_API}/pages", headers=self.headers, timeout=20,
+                          json={"parent": {"database_id": self.database_id}, "properties": props})
+        r.raise_for_status()
+        return r.json()["id"]
+
+    def update_show(self, page_id, end, detected=None):
+        """Adds the show end to the row: `end` = estimated end of the show, `detected` = the
+        moment the end detector noticed it (None when the listening simply reached its time
+        limit)."""
+        props = {"End": text_prop(end.isoformat(timespec="seconds")),
+                 "End source": {"select": {"name": "Detected" if detected else "Time limit"}}}
+        if detected:
+            props["End detected"] = text_prop(detected.isoformat(timespec="seconds"))
+        known = getattr(self, "properties", None)
+        if known:
+            props = {k: v for k, v in props.items() if k in known}
+        r = requests.patch(f"{NOTION_API}/pages/{page_id}", headers=self.headers, timeout=20,
+                           json={"properties": props})
         r.raise_for_status()
 
     def count_plays(self, artist, title):
@@ -1134,6 +1183,8 @@ async def main(offshow=None):
 
     notion = open_notion("notion_missing_db", "missing tracks", MISSING_PROPERTIES)
     history = open_notion("notion_history_db", "history", HISTORY_PROPERTIES)
+    shows = open_notion("notion_shows_db", "show times", SHOWS_PROPERTIES)
+    show_page = None    # row of this evening in the show times database
 
     main_name = config["main_playlist"]
     existing = {p["name"].strip().lower(): p["id"] for p in service.list_playlists()}
@@ -1459,6 +1510,7 @@ async def main(offshow=None):
                             for k in detector.on_speech():
                                 k["current"] = False
                                 keep(k)
+                        previous_end = last_song_end   # where the music before this track ended
                         last_song_end = song_end
                         if gap is not None and gap >= SPEECH_GAP_SECONDS:
                             starter.on_speech()
@@ -1470,6 +1522,20 @@ async def main(offshow=None):
                         else:
                             if not was_started:
                                 log(f"Show start detected ({len(starter.ignored)} track(s) before it ignored)")
+                            if shows and show_page is None:
+                                # Show start: when the music before it ended (the speech starts
+                                # there), else when this first track started.
+                                first = song_start or item["sample_start"]
+                                begin = (previous_end if not was_started and starter.ignored
+                                         and previous_end and previous_end < first else first)
+                                try:
+                                    show_page = shows.add_show(
+                                        start.date(), begin,
+                                        None if was_started else datetime.now(PARIS))
+                                    log("   Notion: show start noted")
+                                except Exception as e:
+                                    show_page = False   # do not try again, the show goes on
+                                    log(f"   Notion: show start not noted ({type(e).__name__})")
                             active = datetime.now(PARIS) >= detect_from
                             kept = detector.on_track(item, active)
                             if not kept and not detector.ended:
@@ -1541,6 +1607,12 @@ async def main(offshow=None):
             for item in detector.dropped:
                 item["current"] = False
                 offshow.keep(item)
+        if shows and show_page:
+            try:
+                shows.update_show(show_page, show_end, ended_at)
+                log("   Notion: show end noted")
+            except Exception as e:
+                log(f"   Notion: show end not noted ({type(e).__name__})")
         notify("Show ended", f"show-ended {ended_at.isoformat(timespec='seconds')} "
                f"ends-at {show_end.isoformat(timespec='seconds')}",
                tags=["show_end"], topic=SHOW_END_TOPIC or None)
@@ -1550,6 +1622,12 @@ async def main(offshow=None):
                    f"in a row); the show ended around {show_end:%H:%M}.", tags=["show_end"])
     else:
         log(f"No show end detected, stopped at the time limit ({ended_at:%H:%M})")
+        if shows and show_page:
+            try:
+                shows.update_show(show_page, ended_at)
+                log("   Notion: show end noted (time limit)")
+            except Exception as e:
+                log(f"   Notion: show end not noted ({type(e).__name__})")
         for item in detector.finish():
             item["current"] = False
             keep(item)

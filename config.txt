@@ -41,6 +41,10 @@ notion_missing_db = 0cfa728c14294956be448e18eb460be1
 # Notion history database: every recognized track with its estimated start time.
 notion_history_db = 1099479c43a944e0a358727716a0d49b
 
+# Notion database of the evenings: the show start and end found by the detectors, to the
+# second (one row per evening). Leave empty to switch it off.
+notion_shows_db = 41d481d1393d8104ae44d71455c86767
+
 # Time listening starts, Paris time (HH:MM). The job may be started a little earlier;
 # the script then waits until this time.
 listen_start = 21:00

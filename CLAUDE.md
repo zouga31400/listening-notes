@@ -12,7 +12,7 @@ Artist - Title
 Artist - Title
 ```
 
-Pushing the file triggers `.github/workflows/lists-sync.yml`, which runs `lists_sync.py` and creates the private playlist on the music service. Do not modify `radio_listen.py` or `.github/workflows/radio.yml`.
+Pushing the file triggers `.github/workflows/lists-sync.yml`, which runs `lists_sync.py` and creates the private playlist on the music service.
 
 The list is the reference for playlists created by this tool (description "Created by <author>", or the older "Created by lists_sync.py"): each run adds what is missing and removes tracks that are no longer chosen (wrong version, line removed) and duplicates. A playlist with the same name not created by the tool is only completed, never trimmed.
 
@@ -27,6 +27,10 @@ When the Notion connector is available:
 A playlist whose tracks have no album art gets a cover and icon chosen by `playlist_cover.py`, in this order: the film or series poster (Film property, from Wikipedia), the photo of the artist who makes up at least half of the list (from the music service, else Wikipedia), a theme cover for the genre named in the title (Soul, Rock, Jazz...), then for the decade (années 90, 1993-1996), then a neutral one. Theme covers are the PNG files of `covers/`, made by `tools/make_covers.py` and served from this public repository; add a theme there and in `GENRES` or `DECADES`. `notion_lists.py --backfill-covers` applies the same rule to older pages.
 
 The Scriptable iOS app `scriptable/playlist-lists.js` ("Playlist Lists", same look as `scriptable/radio-soirees.js`) shows the "Playlist lists" database read-only: library with search, a "to follow" tab (waiting, in error, tracks not found), films, stats, and a home-screen widget. Its Notion key (read-only connection) is asked once and kept in the iOS keychain, never written in the repository. When the Notion properties used by the notion_lists.py report change, keep the app in step.
+
+## The show listening and its Notion databases
+
+`radio_listen.py` (workflow `.github/workflows/radio.yml`) listens to the show, recognizes the tracks and fills the playlists and the Notion databases `notion_history_db` (every track, with its exact start time), `notion_missing_db` (tracks missing from the service) and `notion_shows_db` ("Radio - Soirées": one row per evening with the show start and end found by the detectors, as ISO text to the second: "Start" = estimated start of the show, "Start detected" = when the detector noticed it, "End" = estimated end, "End detected" = when the end detector noticed it, "End source" = Detected or Time limit). These files may be modified when a request needs it; keep the show's behavior unchanged otherwise, and never let a Notion error stop the listening. The Scriptable app `scriptable/radio-soirees.js` reads these databases (stats: start and end of each evening).
 
 ## Always-on listening outside the show
 

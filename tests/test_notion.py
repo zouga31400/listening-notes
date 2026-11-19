@@ -157,5 +157,79 @@ class NotionWrites(unittest.TestCase):
         self.assertEqual(bodies[-1]["cover"]["external"]["url"], "https://img/c.jpg")
 
 
+class ShowTimes(unittest.TestCase):
+    def setUp(self):
+        self.db = r.Notion("token", "abc")
+        self.db.properties = set(r.SHOWS_PROPERTIES) | {"Title"}
+        self.day = datetime(2026, 11, 18, 21, 0).date()
+
+    def test_new_evening_creates_a_row_with_start_and_detection(self):
+        posts = []
+
+        def post(url, **k):
+            posts.append((url, k["json"]))
+            return Response({"results": []} if url.endswith("/query") else {"id": "page1"})
+
+        with mock.patch.object(r.requests, "post", side_effect=post):
+            page = self.db.add_show(self.day, datetime(2026, 11, 18, 21, 4, 12),
+                                    datetime(2026, 11, 18, 21, 5, 40))
+        self.assertEqual(page, "page1")
+        self.assertEqual(posts[0][1]["filter"]["date"]["equals"], "2026-11-18")
+        props = posts[1][1]["properties"]
+        self.assertEqual(props["Title"]["title"][0]["text"]["content"], "2026-11-18")
+        self.assertEqual(props["Date"]["date"]["start"], "2026-11-18")
+        self.assertEqual(props["Start"]["rich_text"][0]["text"]["content"], "2026-11-18T21:04:12")
+        self.assertEqual(props["Start detected"]["rich_text"][0]["text"]["content"],
+                         "2026-11-18T21:05:40")
+
+    def test_existing_evening_is_kept_and_nothing_is_created(self):
+        posts = []
+
+        def post(url, **k):
+            posts.append(url)
+            return Response({"results": [{"id": "old"}]})
+
+        with mock.patch.object(r.requests, "post", side_effect=post):
+            self.assertEqual(self.db.add_show(self.day, datetime(2026, 11, 18, 21, 9)), "old")
+        self.assertEqual(len(posts), 1)
+
+    def test_start_without_detection_leaves_that_property_out(self):
+        bodies = []
+
+        def post(url, **k):
+            bodies.append(k["json"])
+            return Response({"results": []} if url.endswith("/query") else {"id": "p"})
+
+        with mock.patch.object(r.requests, "post", side_effect=post):
+            self.db.add_show(self.day, datetime(2026, 11, 18, 21, 4))
+        self.assertNotIn("Start detected", bodies[1]["properties"])
+
+    def test_end_detected_or_time_limit(self):
+        sent = []
+        with mock.patch.object(r.requests, "patch",
+                               side_effect=lambda url, **k: sent.append((url, k["json"])) or Response()):
+            self.db.update_show("p1", datetime(2026, 11, 19, 0, 41, 3), datetime(2026, 11, 19, 0, 44, 50))
+            self.db.update_show("p1", datetime(2026, 11, 19, 2, 0, 0))
+        first, second = sent[0][1]["properties"], sent[1][1]["properties"]
+        self.assertTrue(sent[0][0].endswith("/pages/p1"))
+        self.assertEqual(first["End source"]["select"]["name"], "Detected")
+        self.assertEqual(first["End"]["rich_text"][0]["text"]["content"], "2026-11-19T00:41:03")
+        self.assertEqual(first["End detected"]["rich_text"][0]["text"]["content"], "2026-11-19T00:44:50")
+        self.assertEqual(second["End source"]["select"]["name"], "Time limit")
+        self.assertNotIn("End detected", second)
+
+    def test_properties_missing_from_the_database_are_left_out(self):
+        self.db.properties = {"Title", "Date", "Start"}
+        bodies = []
+
+        def post(url, **k):
+            bodies.append(k["json"])
+            return Response({"results": []} if url.endswith("/query") else {"id": "p"})
+
+        with mock.patch.object(r.requests, "post", side_effect=post):
+            self.db.add_show(self.day, datetime(2026, 11, 18, 21, 4), datetime(2026, 11, 18, 21, 5))
+        self.assertEqual(set(bodies[1]["properties"]), {"Title", "Date", "Start"})
+
+
 if __name__ == "__main__":
     unittest.main()

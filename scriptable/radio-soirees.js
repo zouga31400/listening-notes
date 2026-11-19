@@ -3,10 +3,11 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-19 · 8";   // shown at the bottom of the app
+const VERSION = "2026-11-19 · 9";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
+const SHOWS_DB = "41d481d1393d8104ae44d71455c86767";   // show start and end of each evening
 const API = "https://api.notion.com/v1";
 const CACHE = FileManager.local().joinPath(FileManager.local().cacheDirectory(), "radio-soirees.json");
 
@@ -110,10 +111,17 @@ async function loadData() {
   if (!key) return null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const [h, m] = await Promise.all([
+      const [h, m, sh] = await Promise.all([
         queryAll(key, HISTORY_DB, "Played at", config.runsInWidget ? 1 : 20),
         queryAll(key, MISSING_DB, "Date", 5),
+        // Not shared with the connection yet, or not available: the app falls back on estimates.
+        config.runsInWidget ? [] : queryAll(key, SHOWS_DB, "Date", 5).catch(() => []),
       ]);
+      const shows = sh.map((pg) => {
+        const p = pg.properties;
+        return {date: prop(p.Date) || "", start: prop(p.Start) || "", startDetected: prop(p["Start detected"]) || "",
+                end: prop(p.End) || "", endDetected: prop(p["End detected"]) || "", source: prop(p["End source"]) || ""};
+      }).filter((x) => x.date && x.start);
       const history = h.map((pg) => {
         const p = pg.properties;
         return {
@@ -135,7 +143,7 @@ async function loadData() {
       });
       const ci = await ciStatus();
       notifyFailure(ci);
-      const data = {history, missing, ci, at: new Date().toISOString()};
+      const data = {history, missing, shows, ci, at: new Date().toISOString()};
       if (!config.runsInWidget) FileManager.local().writeString(CACHE, JSON.stringify(data));
       return data;
     } catch (e) {
@@ -285,6 +293,7 @@ a.cvl{display:block;flex:none}.grid a.cvl{width:100%}
 .tl{display:grid;grid-template-columns:76px 1fr 98px;gap:8px;align-items:center;font-size:13px;margin:8px 0}.tl .rg{position:relative;height:10px;border-radius:5px;background:var(--line)}
 .tl .rg i{position:absolute;top:0;bottom:0;border-radius:5px;background:var(--accent)}.tl .tm{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}.tl.tap{cursor:pointer}
 .axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin:0 98px 0 84px}.note{font-size:12px;color:var(--muted);margin:10px 0 0}
+.shrow{display:flex;justify-content:space-between;font-size:15px;margin:6px 0}.shrow span{color:var(--muted)}.shrow b{font-variant-numeric:tabular-nums}
 .ver{color:var(--muted);font-size:12px;text-align:center;margin:28px 0 0}
 .empty{color:var(--muted);padding:28px 4px;text-align:center}
 </style></head><body>
@@ -303,6 +312,8 @@ const H=D.history.map(r=>{const d=new Date(r.start);const p=pp(d);return Object.
 const T=H.filter(r=>r.status!=='Excerpt');
 const evs=[...new Set(H.map(r=>r.ev))].sort().reverse();
 const todayEv=evOf(new Date());
+const SH=new Map((D.shows||[]).map(x=>[x.date.slice(0,10),x]));
+const clk=(iso)=>new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(iso));
 const cap=(x)=>x.charAt(0).toUpperCase()+x.slice(1);
 const dayDiff=(ev)=>Math.round((U(todayEv)-U(ev))/864e5);
 const monthName=(ev)=>cap(new Intl.DateTimeFormat('fr-FR',{timeZone:'UTC',month:'long',year:'numeric'}).format(U(ev)));
@@ -361,6 +372,12 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     i.oninput=()=>{query=i.value;fill()};fill()}
   if(tab==='soiree'){if(!evs.length){M.append(el('div','empty','Aucun titre pour l\\'instant.'));return}
     const s=el('select');for(const e of evs){const o=el('option',null,fmtEv(e)+' · '+nT(e)+' titres');o.value=e;s.append(o)}s.value=cur;s.onchange=()=>{cur=s.value;render()};M.append(s);
+    const sh=SH.get(cur);
+    if(sh){const b=el('div','box');b.append(el('h3',null,'Émission'));
+      const row=(l,v)=>{const d=el('div','shrow');d.append(el('span',null,l),el('b',null,v));b.append(d)};
+      row('Début',clk(sh.start));if(sh.startDetected)row('Début détecté',clk(sh.startDetected));
+      if(sh.end){row('Fin',clk(sh.end));if(sh.endDetected)row('Fin détectée',clk(sh.endDetected));else row('Fin détectée','non détectée (limite de temps)')}
+      else row('Fin','en cours');M.append(b)}
     for(const r of H.filter(r=>r.ev===cur))M.append(card(r))}
   if(tab==='stats'){const k=el('div','kpis');const kpi=(n,l)=>{const d=el('div','kpi');d.append(el('b',null,String(n)),el('span',null,l));k.append(d)};
     kpi(T.length,'titres retenus');kpi(evs.length,'soirées');kpi(new Set(T.map(r=>r.artist.toLowerCase())).size,'artistes');kpi(D.missing.length,'absents du service');M.append(k);
@@ -370,8 +387,13 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     // and end of the last track kept (the tracks after the detected end are not kept).
     const mOf=(d)=>{const q=pp(d);let m=(+q.hour)*60+(+q.minute);if(m<720)m+=1440;return m};
     const hh=(m)=>{const x=((Math.round(m)%1440)+1440)%1440;return String(Math.floor(x/60)).padStart(2,'0')+'h'+String(x%60).padStart(2,'0')};
-    const spans=evs.map(ev=>{const r=H.filter(x=>x.ev===ev);if(r.length<3)return null;const a=r[0],b=r[r.length-1];
-      const endD=new Date(b.d.getTime()+(b.duration||0)*1000);const s=mOf(a.d);return {ev,s,e:Math.max(mOf(endD),s),live:ev===todayEv&&Date.now()-endD.getTime()<1500000}}).filter(Boolean);
+    const allEv=[...new Set([...evs,...SH.keys()])].sort().reverse();
+    const spans=allEv.map(ev=>{const sh=SH.get(ev);
+      if(sh&&sh.start){const s0=mOf(new Date(sh.start));
+        if(sh.end)return {ev,s:s0,e:Math.max(mOf(new Date(sh.end)),s0),exact:true,live:false};
+        if(ev===todayEv)return {ev,s:s0,e:s0,exact:true,live:true}}
+      const r=H.filter(x=>x.ev===ev);if(r.length<3)return null;const a=r[0],b=r[r.length-1];
+      const endD=new Date(b.d.getTime()+(b.duration||0)*1000);const s=mOf(a.d);return {ev,s,e:Math.max(mOf(endD),s),exact:false,live:ev===todayEv&&Date.now()-endD.getTime()<1500000}}).filter(Boolean);
     if(spans.length){const done=spans.filter(x=>!x.live);const avg=(f)=>done.reduce((t,x)=>t+f(x),0)/Math.max(1,done.length);
       const hb=el('div','box');hb.append(el('h3',null,'Horaires détectés'));
       if(done.length){const a=el('div','avg');const av=(v,l)=>{const d=el('div');d.append(el('b',null,v),el('span',null,l));a.append(d)};
@@ -379,9 +401,9 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
       const shown=spans.slice(0,14);const lo=Math.floor(Math.min(...shown.map(x=>x.s))/30)*30,hi=Math.ceil(Math.max(...shown.map(x=>x.e))/30)*30;
       const ax=el('div','axis');ax.append(el('span',null,hh(lo)),el('span',null,hh(hi)));hb.append(ax);
       for(const x of shown){const t=el('div','tl tap');const rg=el('div','rg');const i=el('i');i.style.left=(100*(x.s-lo)/(hi-lo))+'%';i.style.width=Math.max(1.5,100*(x.e-x.s)/(hi-lo))+'%';rg.append(i);
-        t.append(el('span',null,fmtEv(x.ev,{weekday:'short',day:'numeric',month:'short'})),rg,el('span','tm',hh(x.s)+'–'+(x.live?'…':hh(x.e))));
+        t.append(el('span',null,fmtEv(x.ev,{weekday:'short',day:'numeric',month:'short'})),rg,el('span','tm',(x.exact?'':'~')+hh(x.s)+'–'+(x.live?'…':hh(x.e))));
         t.onclick=()=>{cur=x.ev;tab='soiree';setTab()};hb.append(t)}
-      hb.append(el('p','note','Début : premier titre de l\\'émission. Fin : fin du dernier titre avant la détection de fin.'));M.append(hb)}
+      hb.append(el('p','note','Heures relevées par l\\'écoute (début et fin de l\\'émission). ~ : estimées d\\'après les titres, pour les soirées sans relevé.'));M.append(hb)}
     const mc={Calme:'var(--calme)',Groove:'var(--groove)','Énergique':'var(--ener)'};
     M.append(bars('Ambiances',['Calme','Groove','Énergique'].map(x=>[x,T.filter(r=>r.mood===x).length]),k=>mc[k]));
     M.append(bars('Décennies',count(T,r=>r.decade).sort((a,b)=>parseInt(a[0])-parseInt(b[0]))));
