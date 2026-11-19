@@ -3,10 +3,11 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-19 · 13";   // shown at the bottom of the app
+const VERSION = "2026-11-19 · 14";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
+const ARTISTS_DB = "41d481d1393d81b095ece915e9b186b9";   // biography, albums, influences, similar artists
 const SHOWS_DB = "41d481d1393d8104ae44d71455c86767";   // show start and end of each evening
 const API = "https://api.notion.com/v1";
 const CACHE = FileManager.local().joinPath(FileManager.local().cacheDirectory(), "radio-soirees.json");
@@ -37,7 +38,14 @@ function prop(p) {
   if (!p) return null;
   switch (p.type) {
     case "title": return p.title.map((t) => t.plain_text).join("");
-    case "rich_text": return p.rich_text.map((t) => t.plain_text).join("");
+    case "rich_text": {   // long texts are stored in parts cut on spaces: put the space back between parts
+      let out = "";
+      for (const t of p.rich_text) {
+        const x = t.plain_text;
+        out += out && !/\s$/.test(out) && !/^\s/.test(x) ? " " + x : x;
+      }
+      return out;
+    }
     case "select": return p.select ? p.select.name : "";
     case "number": return p.number;
     case "url": return p.url || "";
@@ -111,12 +119,20 @@ async function loadData() {
   if (!key) return null;
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const [h, m, sh] = await Promise.all([
+      const [h, m, sh, ar] = await Promise.all([
         queryAll(key, HISTORY_DB, "Played at", config.runsInWidget ? 1 : 20),
         queryAll(key, MISSING_DB, "Date", 5),
         // Not shared with the connection yet, or not available: the app falls back on estimates.
         config.runsInWidget ? [] : queryAll(key, SHOWS_DB, "Date", 5).catch(() => []),
+        // Artist pages: not shared with the connection yet, or not available: no artist page.
+        config.runsInWidget ? [] : queryAll(key, ARTISTS_DB, "Name", 10).catch(() => []),
       ]);
+      const artists = ar.map((pg) => {
+        const p = pg.properties;
+        return {name: prop(p.Name) || "", country: prop(p.Country) || "", bio: prop(p.Bio) || "",
+                source: prop(p["Bio source"]) || "", albums: prop(p.Albums) || "",
+                influences: prop(p.Influences) || "", similar: prop(p.Similar) || "", image: prop(p.Image) || ""};
+      }).filter((x) => x.name);
       const shows = sh.map((pg) => {
         const p = pg.properties;
         return {date: prop(p.Date) || "", start: prop(p.Start) || "", startDetected: prop(p["Start detected"]) || "",
@@ -144,7 +160,7 @@ async function loadData() {
       });
       const ci = await ciStatus();
       notifyFailure(ci);
-      const data = {history, missing, shows, ci, at: new Date().toISOString()};
+      const data = {history, missing, shows, artists, ci, at: new Date().toISOString()};
       if (!config.runsInWidget) FileManager.local().writeString(CACHE, JSON.stringify(data));
       return data;
     } catch (e) {
@@ -296,6 +312,16 @@ a.cvl{display:block;flex:none}.grid a.cvl{width:100%}
 .axis{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin:0 98px 0 84px}.note{font-size:12px;color:var(--muted);margin:10px 0 0}
 .shrow{display:flex;justify-content:space-between;font-size:15px;margin:6px 0}.shrow span{color:var(--muted)}.shrow b{font-variant-numeric:tabular-nums}
 .box .note{margin:8px 0 0;font-size:12px;color:var(--muted)}
+.a.lnk{cursor:pointer;color:var(--accent)}
+.back{border:0;background:none;color:var(--accent);font:inherit;font-size:16px;padding:6px 0;margin:0 0 6px}
+.ahead{display:flex;gap:14px;align-items:center;margin-bottom:14px}
+.aimg{width:96px;height:96px;border-radius:50%;object-fit:cover;background:var(--seg);flex:none}
+.ahead h2{margin:0;font-size:26px;letter-spacing:-.3px}.ahead .d{margin-top:2px}
+.box .bio p{margin:0 0 10px;line-height:1.45}.box .src{font-size:12px;color:var(--muted);margin-top:4px}
+.alb{display:grid;grid-template-columns:48px 1fr;gap:4px 10px;font-size:15px}.alb b{color:var(--muted);font-weight:500;font-variant-numeric:tabular-nums}
+.tags{display:flex;flex-wrap:wrap;gap:8px}.tags span,.tags button{font:inherit;font-size:14px;border:0;border-radius:99px;padding:6px 12px;background:var(--seg);color:var(--fg)}
+.tags button{color:var(--accent);font-weight:600}
+.heard{font-size:14px;margin:6px 0;display:flex;justify-content:space-between;gap:10px}.heard span:last-child{color:var(--muted);white-space:nowrap}
 .ver{color:var(--muted);font-size:12px;text-align:center;margin:28px 0 0}
 .empty{color:var(--muted);padding:28px 4px;text-align:center}
 </style></head><body>
@@ -337,7 +363,24 @@ const groupLabel=(ev)=>{const d=dayDiff(ev);
   if(y===ty&&m===tm)return 'Mois en cours';
   if(y===ty)return monthName(ev);
   return String(y)};
-let cur=evs[0],tab='biblio',layout='list',query='';
+let cur=evs[0],tab='biblio',layout='list',query='',view=null,artist=null,trail=[];
+const AR=new Map();for(const x of (D.artists||[]))AR.set(nk(x.name),x);
+const firstName=(n)=>(n||'').split(/\\s+(?:&|feat\\.?|ft\\.?|featuring|x|with|and)\\s+|,\\s*/i)[0];
+const findArtist=(n)=>AR.get(nk(n))||AR.get(nk(firstName(n)));
+function openArtist(n){if(view==='artist')trail.push(artist);artist=n;view='artist';render();window.scrollTo(0,0)}
+function back(){if(trail.length)artist=trail.pop();else view=null;render();window.scrollTo(0,0)}
+function renderArtist(M){
+  const b=el('button','back','‹ Retour');b.onclick=back;M.append(b);
+  const x=findArtist(artist);const rows=H.filter(r=>nk(r.artist)===nk(artist)||nk(firstName(r.artist))===nk(firstName(artist))).sort((a,c)=>c.d-a.d);
+  const head=el('div','ahead');const img=(x&&x.image)?el('img','aimg'):el('div','aimg');if(x&&x.image){img.src=x.image;img.alt=''}head.append(img);
+  const hm=el('div');hm.append(el('h2',null,x?x.name:artist));const cs=[x&&x.country,rows.length+' titre'+(rows.length>1?'s':'')+' entendu'+(rows.length>1?'s':'')].filter(Boolean).join(' · ');hm.append(el('div','d',cs));head.append(hm);M.append(head);
+  if(!x){const c=el('div','box');c.append(el('p','note','La fiche de cet artiste sera ajoutée automatiquement demain matin.'));M.append(c)}
+  if(x&&x.bio){const c=el('div','box');c.append(el('h3',null,'Biographie'));const bio=el('div','bio');for(const p of x.bio.split(/\\n\\s*\\n|\\n/).filter(Boolean))bio.append(el('p',null,p));c.append(bio);if(x.source)c.append(el('div','src',x.source));M.append(c)}
+  if(x&&x.albums){const c=el('div','box');c.append(el('h3',null,'Albums'));const g=el('div','alb');for(const l of x.albums.split('\\n').filter(Boolean)){const m=/^(\\S+) · (.*)$/.exec(l);g.append(el('b',null,m?m[1]:''),el('span',null,m?m[2]:l))}c.append(g);M.append(c)}
+  if(x&&x.influences){const c=el('div','box');c.append(el('h3',null,'Influences'));const t=el('div','tags');for(const n of x.influences.split(/,\\s*/).filter(Boolean)){const f=findArtist(n);if(f){const bt=el('button',null,n);bt.onclick=()=>openArtist(f.name);t.append(bt)}else t.append(el('span',null,n))}c.append(t);M.append(c)}
+  if(rows.length){const c=el('div','box');c.append(el('h3',null,'Titres entendus'));for(const r of rows.slice(0,30)){const d=el('div','heard');d.append(el('span',null,r.title),el('span',null,new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',day:'numeric',month:'short'}).format(r.d)));c.append(d)}M.append(c)}
+  if(x&&x.similar){const c=el('div','box');c.append(el('h3',null,'Artistes similaires'));const t=el('div','tags');for(const n of x.similar.split(/,\\s*/).filter(Boolean)){const f=findArtist(n);if(f){const bt=el('button',null,n);bt.onclick=()=>openArtist(f.name);t.append(bt)}else t.append(el('span',null,n))}c.append(t);M.append(c)}
+}
 const nT=(ev)=>T.filter(r=>r.ev===ev).length;
 document.getElementById('ver').textContent='Version '+(D.version||'?');
 document.getElementById('sub').textContent=H.length?(T.length+' titres sur '+evs.length+' soirées'):'Aucune donnée';
@@ -353,7 +396,7 @@ function card(r){
   const main=list||r.link||r.shazam||r.youtube||'';
   let img;if(r.cover){img=el('img','cover');img.loading='lazy';img.alt='';img.src=r.cover}else img=el('div','cover');
   if(main){const l=el('a','cvl');l.href=main;l.append(img);a.append(l)}else a.append(img);
-  const m=el('div','meta');m.append(el('div','t',r.title),el('div','a',r.artist));
+  const m=el('div','meta');const an=el('div','a lnk',r.artist);an.onclick=()=>openArtist(r.artist);m.append(el('div','t',r.title),an);
   const alb=[r.album,r.year].filter(Boolean).join(' · ');
   m.append(el('div','d',dateLine(r)));
   const extra=[r.status==='Excerpt'?'Extrait court':'',alb,r.position].filter(Boolean).join(' · ');if(extra)m.append(el('div','d',extra));
@@ -372,6 +415,7 @@ function bars(title,items,color,note){const c=el('div','box');c.append(el('h3',n
   for(const [k,v] of items){const b=el('div','hb');const tr=el('div','tr');const i=el('i');i.style.width=(100*v/mx)+'%';if(color)i.style.background=color(k);tr.append(i);b.append(el('span','name',k),tr,el('span','n',String(v)));c.append(b)}if(note)c.append(el('p','note',note));return c}
 const count=(arr,f)=>{const m=new Map();for(const r of arr){const k=f(r);if(k)m.set(k,(m.get(k)||0)+1)}return [...m]};
 function render(){const M=document.getElementById('main');M.replaceChildren();
+  if(view==='artist'){renderArtist(M);return}
   if(tab==='biblio'){
     const bar=el('div','bar');const i=el('input');i.type='search';i.placeholder='Rechercher un titre, un artiste…';i.value=query;i.id='q';
     const v=el('div','view');for(const [k,l] of [['list','Liste'],['grid','Grille']]){const b=el('button',layout===k?'on':'',l);b.onclick=()=>{layout=k;render()};v.append(b)}
@@ -429,7 +473,7 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     M.append(bars('Pays des artistes',top(r=>r.country),null,unk(r=>r.country)))}
   if(tab==='absents'){if(!A.length){M.append(el('div','empty','Aucun titre absent.'));return}
     for(const [label,items] of groups(A)){M.append(el('h2',null,label));for(const r of items)M.append(card(r))}}}
-function setTab(){document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));render();window.scrollTo(0,0)}
+function setTab(){view=null;trail=[];document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));render();window.scrollTo(0,0)}
 document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;setTab()});
 render();
 </script></body></html>`;
