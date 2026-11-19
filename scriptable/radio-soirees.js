@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-19 · 9";   // shown at the bottom of the app
+const VERSION = "2026-11-19 · 10";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -386,13 +386,16 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     // Detected start and end of the show, per evening: first track kept (the show starts with it)
     // and end of the last track kept (the tracks after the detected end are not kept).
     const mOf=(d)=>{const q=pp(d);let m=(+q.hour)*60+(+q.minute);if(m<720)m+=1440;return m};
+    // Tracks played outside the show (tests in the daytime...) are ignored for the estimated times:
+    // the show is between 20h00 and 02h30.
+    const inShow=(d)=>{const m=mOf(d);return m>=1200&&m<=1590};
     const hh=(m)=>{const x=((Math.round(m)%1440)+1440)%1440;return String(Math.floor(x/60)).padStart(2,'0')+'h'+String(x%60).padStart(2,'0')};
     const allEv=[...new Set([...evs,...SH.keys()])].sort().reverse();
     const spans=allEv.map(ev=>{const sh=SH.get(ev);
       if(sh&&sh.start){const s0=mOf(new Date(sh.start));
         if(sh.end)return {ev,s:s0,e:Math.max(mOf(new Date(sh.end)),s0),exact:true,live:false};
         if(ev===todayEv)return {ev,s:s0,e:s0,exact:true,live:true}}
-      const r=H.filter(x=>x.ev===ev);if(r.length<3)return null;const a=r[0],b=r[r.length-1];
+      const r=H.filter(x=>x.ev===ev&&inShow(x.d));if(r.length<3)return null;const a=r[0],b=r[r.length-1];
       const endD=new Date(b.d.getTime()+(b.duration||0)*1000);const s=mOf(a.d);return {ev,s,e:Math.max(mOf(endD),s),exact:false,live:ev===todayEv&&Date.now()-endD.getTime()<1500000}}).filter(Boolean);
     if(spans.length){const done=spans.filter(x=>!x.live);const avg=(f)=>done.reduce((t,x)=>t+f(x),0)/Math.max(1,done.length);
       const hb=el('div','box');hb.append(el('h3',null,'Horaires détectés'));
