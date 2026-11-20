@@ -82,6 +82,11 @@ excerpts_playlist = Radio Extraits
 listen_interval = 45
 speech_interval = 90
 
+# Name of the Scriptable script of the Radio Soirees app on the phone. The notification of
+# each track then opens the app on the artist page (and has an "Open the app" button).
+# Empty = the notification opens the music app as before.
+app_link_script = Radio Soirées
+
 # Number of matching recognitions before a track is added (1 = at the first one).
 # 2 avoids false matches when the host talks over the music; a track about to end
 # is added at once.
