@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-20 · 17";   // shown at the bottom of the app
+const VERSION = "2026-11-20 · 18";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -295,7 +295,7 @@ h2{font-size:21px;margin:22px 0 10px;letter-spacing:-.2px}
 .Calme{background:var(--calme-bg);color:var(--calme)}.Groove{background:var(--groove-bg);color:var(--groove)}.Énergique{background:var(--ener-bg);color:var(--ener)}
 .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.acts a{font-size:13px;font-weight:600;color:var(--accent);background:var(--seg);border-radius:99px;padding:5px 12px;text-decoration:none}
 a.cvl{display:block}.cvw{position:relative;flex:none;border-radius:12px;overflow:hidden;line-height:0}.grid .cvw{width:100%}
-.ribbon{position:absolute;left:0;top:0;background:var(--exc-ribbon);color:#1c1c1f;font-size:10px;font-weight:800;line-height:1.3;padding:2px 8px;border-bottom-right-radius:8px;letter-spacing:.5px}
+.ribbon{position:absolute;left:0;top:0;background:#fff;color:#14161a;font-size:10px;font-weight:800;line-height:1.3;padding:2px 8px;border-bottom-right-radius:8px;letter-spacing:.5px;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 .chip.exc{background:var(--exc-bg);color:var(--exc)}
 .ex .t{font-style:italic;font-weight:600}.ex{opacity:.78}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid .card{flex-direction:column;align-items:stretch;gap:8px;padding:10px;margin:0;min-width:0}.grid .meta{width:100%}.grid .acts{flex-wrap:wrap}
