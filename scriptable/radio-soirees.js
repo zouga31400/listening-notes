@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-20 · 15";   // shown at the bottom of the app
+const VERSION = "2026-11-20 · 16";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -350,6 +350,7 @@ const A=D.missing.filter(x=>x.title).map(x=>{const h=hk.get(nk(x.artist)+'|'+nk(
   const d=day?new Date(day+'T12:00:00Z'):new Date(0);
   return Object.assign({},x,{d,ev:day||'1970-01-01',noTime:true,link:'',status:'Not found',mood:'',position:''})}).sort((a,b)=>b.d-a.d);
 const evs=[...new Set(H.map(r=>r.ev))].sort().reverse();
+const evsT=[...new Set(T.map(r=>r.ev))].sort().reverse();   // evenings of the statistics: short excerpts left out
 const todayEv=evOf(new Date());
 const SH=new Map((D.shows||[]).map(x=>[x.date.slice(0,10),x]));
 const clk=(iso)=>new Intl.DateTimeFormat('fr-FR',{timeZone:'Europe/Paris',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(iso));
@@ -385,7 +386,7 @@ function renderArtist(M){
 }
 const nT=(ev)=>T.filter(r=>r.ev===ev).length;
 document.getElementById('ver').textContent='Version '+(D.version||'?');
-document.getElementById('sub').textContent=H.length?(T.length+' titres sur '+evs.length+' soirées'):'Aucune donnée';
+document.getElementById('sub').textContent=H.length?(T.length+' titres sur '+evsT.length+' soirées'):'Aucune donnée';
 const W=document.getElementById('warn');
 if(D.ci&&!D.ci.ok){const w=el('div','warn bad','⚠️ La dernière exécution du workflow a échoué. ');const a=el('a',null,'Voir');a.href=D.ci.url;w.append(a);W.append(w)}
 if(D.offline)W.append(el('div','warn',D.offline));
@@ -438,8 +439,8 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
       else row('Fin','en cours');M.append(b)}
     for(const r of H.filter(r=>r.ev===cur))M.append(card(r))}
   if(tab==='stats'){const k=el('div','kpis');const kpi=(n,l)=>{const d=el('div','kpi');d.append(el('b',null,String(n)),el('span',null,l));k.append(d)};
-    kpi(T.length,'titres retenus');kpi(evs.length,'soirées');kpi(new Set(T.map(r=>r.artist.toLowerCase())).size,'artistes');kpi(D.missing.length,'absents du service');M.append(k);
-    const c=el('div','box');c.append(el('h3',null,'Titres par soirée'));const cols=el('div','cols');const last=evs.slice(0,14).reverse();const mx=Math.max(1,...last.map(nT));
+    kpi(T.length,'titres retenus');kpi(evsT.length,'soirées');kpi(new Set(T.map(r=>r.artist.toLowerCase())).size,'artistes');kpi(D.missing.length,'absents du service');M.append(k);
+    const c=el('div','box');c.append(el('h3',null,'Titres par soirée'));const cols=el('div','cols');const last=evsT.slice(0,14).reverse();const mx=Math.max(1,...last.map(nT));
     for(const e of last){const d=el('div');const i=el('i');i.style.height=(85*nT(e)/mx)+'%';d.append(el('em',null,String(nT(e))),i,el('span',null,fmtEv(e,{day:'2-digit',month:'2-digit'})));d.onclick=()=>{cur=e;tab='soiree';setTab()};cols.append(d)}c.append(cols);M.append(c);
     // Detected start and end of the show, per evening: first track kept (the show starts with it)
     // and end of the last track kept (the tracks after the detected end are not kept).
@@ -448,12 +449,12 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
     // the show is between 21h00 (music before it is ignored too) and 02h30.
     const inShow=(d)=>{const m=mOf(d);return m>=1260&&m<=1590};
     const hh=(m)=>{const x=((Math.round(m)%1440)+1440)%1440;return String(Math.floor(x/60)).padStart(2,'0')+'h'+String(x%60).padStart(2,'0')};
-    const allEv=[...new Set([...evs,...SH.keys()])].sort().reverse();
+    const allEv=[...new Set([...evsT,...SH.keys()])].sort().reverse();
     const spans=allEv.map(ev=>{const sh=SH.get(ev);
       if(sh&&sh.start){const s0=mOf(new Date(sh.start));
         if(sh.end)return {ev,s:s0,e:Math.max(mOf(new Date(sh.end)),s0),exact:true,live:false};
         if(ev===todayEv)return {ev,s:s0,e:s0,exact:true,live:true}}
-      const r=H.filter(x=>x.ev===ev&&inShow(x.d));if(r.length<3)return null;const a=r[0],b=r[r.length-1];
+      const r=T.filter(x=>x.ev===ev&&inShow(x.d));if(r.length<3)return null;const a=r[0],b=r[r.length-1];
       const endD=new Date(b.d.getTime()+(b.duration||0)*1000);const s=mOf(a.d);return {ev,s,e:Math.max(mOf(endD),s),exact:false,live:ev===todayEv&&Date.now()-endD.getTime()<1500000}}).filter(Boolean);
     if(spans.length){const done=spans.filter(x=>!x.live);const avg=(f)=>done.reduce((t,x)=>t+f(x),0)/Math.max(1,done.length);
       const hb=el('div','box');hb.append(el('h3',null,'Horaires détectés'));
