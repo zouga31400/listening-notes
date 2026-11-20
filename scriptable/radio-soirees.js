@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-20 · 18";   // shown at the bottom of the app
+const VERSION = "2026-11-20 · 19";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -268,9 +268,9 @@ function html(data) {
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--fg:#14161a;--muted:#6b717c;--line:#e3e5e9;--accent:#2f6fde;--seg:#e6e8ec;--segon:#fff;
---calme-bg:#dcecfb;--calme:#1d5f99;--groove-bg:#fbefcc;--groove:#7a5800;--ener-bg:#fbdcdc;--ener:#9b2222;--exc-bg:#ffe8cc;--exc:#8a4b00;--exc-ribbon:#ff9f43}
+--calme-bg:#dcecfb;--calme:#1d5f99;--groove-bg:#fbefcc;--groove:#7a5800;--ener-bg:#fbdcdc;--ener:#9b2222;--exc-bg:#ffe8cc;--exc:#8a4b00;--exc-ribbon:#ff9f43;--abs-bg:#efe1ff;--abs:#6a2fb0;--abs-ribbon:#9b4dff}
 @media (prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1f;--fg:#f5f5f7;--muted:#9a9aa2;--line:#2b2b30;--accent:#7fb3ff;--seg:#1f1f23;--segon:#3a3a40;
---calme-bg:#173a52;--calme:#7cc4ff;--groove-bg:#4a3a12;--groove:#ffd166;--ener-bg:#4d1d1d;--ener:#ff8a80;--exc-bg:#4d3112;--exc:#ffb35c;--exc-ribbon:#ff9f43}}
+--calme-bg:#173a52;--calme:#7cc4ff;--groove-bg:#4a3a12;--groove:#ffd166;--ener-bg:#4d1d1d;--ener:#ff8a80;--exc-bg:#4d3112;--exc:#ffb35c;--exc-ribbon:#ff9f43;--abs-bg:#33214a;--abs:#cfa6ff;--abs-ribbon:#b565ff}}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font:16px -apple-system,system-ui,sans-serif}
 body{padding:calc(env(safe-area-inset-top) + 8px) max(16px,env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 28px) max(16px,env(safe-area-inset-left))}
 h1{font-size:34px;margin:6px 0 2px;letter-spacing:-.5px}.sub{color:var(--muted);margin:0 0 14px;font-size:15px}
@@ -290,13 +290,16 @@ h2{font-size:21px;margin:22px 0 10px;letter-spacing:-.2px}
 .meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .t{font-size:18px;font-weight:700;line-height:1.2;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .a{font-size:15px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.d{font-size:14px;color:var(--muted)}
-.chips{display:flex;gap:6px;margin-top:3px;min-width:0}.chip{font-size:12px;padding:2px 9px;border-radius:99px;font-weight:600;white-space:nowrap;flex:none}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:3px;min-width:0}.chip{font-size:12px;padding:2px 9px;border-radius:99px;font-weight:600;white-space:nowrap;flex:none}
 .chip.genre{background:var(--seg);color:var(--muted);flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .Calme{background:var(--calme-bg);color:var(--calme)}.Groove{background:var(--groove-bg);color:var(--groove)}.Énergique{background:var(--ener-bg);color:var(--ener)}
 .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.acts a{font-size:13px;font-weight:600;color:var(--accent);background:var(--seg);border-radius:99px;padding:5px 12px;text-decoration:none}
 a.cvl{display:block}.cvw{position:relative;flex:none;border-radius:12px;overflow:hidden;line-height:0}.grid .cvw{width:100%}
 .ribbon{position:absolute;left:0;top:0;background:#fff;color:#14161a;font-size:10px;font-weight:800;line-height:1.3;padding:2px 8px;border-bottom-right-radius:8px;letter-spacing:.5px;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
 .chip.exc{background:var(--exc-bg);color:var(--exc)}
+.chip.abs{background:var(--abs-bg);color:var(--abs)}
+.ribbon.abs{background:var(--abs-ribbon);color:#fff;box-shadow:none}
+.card{position:relative;overflow:hidden}.card.abs{padding-left:20px}.card.abs:before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:var(--abs-ribbon)}
 .ex .t{font-style:italic;font-weight:600}.ex{opacity:.78}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid .card{flex-direction:column;align-items:stretch;gap:8px;padding:10px;margin:0;min-width:0}.grid .meta{width:100%}.grid .acts{flex-wrap:wrap}
 .grid .cover{width:100%;height:auto;aspect-ratio:1}.grid .t{font-size:15px}.grid .a,.grid .d{font-size:13px}
@@ -392,19 +395,21 @@ if(D.ci&&!D.ci.ok){const w=el('div','warn bad','⚠️ La dernière exécution d
 if(D.offline)W.append(el('div','warn',D.offline));
 function dateLine(r){const x=new Intl.DateTimeFormat('fr-FR',{timeZone:r.noTime?'UTC':'Europe/Paris',weekday:'short',day:'numeric',month:'short'}).format(r.d);return r.noTime?x:x+' à '+r.time}
 function card(r){
-  const a=el('div','card'+(r.status==='Excerpt'?' ex':''));
+  // Absent from the music service (short excerpts keep their own marker).
+  const absent=r.status!=='Excerpt'&&(!r.link||r.status==='Not found'||r.status==='Not on Qobuz');
+  const a=el('div','card'+(r.status==='Excerpt'?' ex':'')+(absent?' abs':''));
   // Track not on the music service: no playlist button. Otherwise the daily playlist, else the monthly one.
   const onService=!!r.link&&r.status!=='Not found'&&r.status!=='Not on Qobuz';
   const list=onService?(r.dayPlaylist||r.monthPlaylist):'';
   const main=list||r.link||r.shazam||r.youtube||'';
   let img;if(r.cover){img=el('img','cover');img.loading='lazy';img.alt='';img.src=r.cover}else img=el('div','cover');
   const cw=el('div','cvw');if(main){const l=el('a','cvl');l.href=main;l.append(img);cw.append(l)}else cw.append(img);
-  if(r.status==='Excerpt')cw.append(el('span','ribbon','EXTRAIT'));a.append(cw);
+  if(r.status==='Excerpt')cw.append(el('span','ribbon','EXTRAIT'));else if(absent)cw.append(el('span','ribbon abs','ABSENT'));a.append(cw);
   const m=el('div','meta');const an=el('div','a lnk',r.artist);an.onclick=()=>openArtist(r.artist);m.append(el('div','t',r.title),an);
   const alb=[r.album,r.year].filter(Boolean).join(' · ');
   m.append(el('div','d',dateLine(r)));
   const extra=[alb,r.position].filter(Boolean).join(' · ');if(extra)m.append(el('div','d',extra));
-  if(r.genre||r.mood||r.status==='Excerpt'){const c=el('div','chips');if(r.status==='Excerpt')c.append(el('span','chip exc','✂️ Extrait'));if(r.genre)c.append(el('span','chip genre',r.genre));if(r.mood)c.append(el('span','chip '+r.mood,r.mood));m.append(c)}
+  if(r.genre||r.mood||r.status==='Excerpt'||absent){const c=el('div','chips');if(r.status==='Excerpt')c.append(el('span','chip exc','✂️ Extrait'));if(absent)c.append(el('span','chip abs','⛔ Absent de Qobuz'));if(r.genre)c.append(el('span','chip genre',r.genre));if(r.mood)c.append(el('span','chip '+r.mood,r.mood));m.append(c)}
   const acts=el('div','acts');
   if(list){const x=el('a',null,r.dayPlaylist?'▶ Playlist du jour':'▶ Playlist du mois');x.href=list;acts.append(x)}
   // The track link opens the album, like the Album button: only kept when there is no album link.
