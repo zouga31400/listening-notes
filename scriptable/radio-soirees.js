@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-19 · 14";   // shown at the bottom of the app
+const VERSION = "2026-11-20 · 15";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -268,9 +268,9 @@ function html(data) {
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <style>
 :root{--bg:#f4f5f7;--card:#fff;--fg:#14161a;--muted:#6b717c;--line:#e3e5e9;--accent:#2f6fde;--seg:#e6e8ec;--segon:#fff;
---calme-bg:#dcecfb;--calme:#1d5f99;--groove-bg:#fbefcc;--groove:#7a5800;--ener-bg:#fbdcdc;--ener:#9b2222}
+--calme-bg:#dcecfb;--calme:#1d5f99;--groove-bg:#fbefcc;--groove:#7a5800;--ener-bg:#fbdcdc;--ener:#9b2222;--exc-bg:#ffe8cc;--exc:#8a4b00;--exc-ribbon:#ff9f43}
 @media (prefers-color-scheme:dark){:root{--bg:#000;--card:#1c1c1f;--fg:#f5f5f7;--muted:#9a9aa2;--line:#2b2b30;--accent:#7fb3ff;--seg:#1f1f23;--segon:#3a3a40;
---calme-bg:#173a52;--calme:#7cc4ff;--groove-bg:#4a3a12;--groove:#ffd166;--ener-bg:#4d1d1d;--ener:#ff8a80}}
+--calme-bg:#173a52;--calme:#7cc4ff;--groove-bg:#4a3a12;--groove:#ffd166;--ener-bg:#4d1d1d;--ener:#ff8a80;--exc-bg:#4d3112;--exc:#ffb35c;--exc-ribbon:#ff9f43}}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--fg);font:16px -apple-system,system-ui,sans-serif}
 body{padding:calc(env(safe-area-inset-top) + 8px) max(16px,env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 28px) max(16px,env(safe-area-inset-left))}
 h1{font-size:34px;margin:6px 0 2px;letter-spacing:-.5px}.sub{color:var(--muted);margin:0 0 14px;font-size:15px}
@@ -294,7 +294,9 @@ h2{font-size:21px;margin:22px 0 10px;letter-spacing:-.2px}
 .chip.genre{background:var(--seg);color:var(--muted);flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .Calme{background:var(--calme-bg);color:var(--calme)}.Groove{background:var(--groove-bg);color:var(--groove)}.Énergique{background:var(--ener-bg);color:var(--ener)}
 .acts{display:flex;flex-wrap:wrap;gap:8px;margin-top:6px}.acts a{font-size:13px;font-weight:600;color:var(--accent);background:var(--seg);border-radius:99px;padding:5px 12px;text-decoration:none}
-a.cvl{display:block;flex:none}.grid a.cvl{width:100%}
+a.cvl{display:block}.cvw{position:relative;flex:none;border-radius:12px;overflow:hidden;line-height:0}.grid .cvw{width:100%}
+.ribbon{position:absolute;left:0;top:0;background:var(--exc-ribbon);color:#1c1c1f;font-size:10px;font-weight:800;line-height:1.3;padding:2px 8px;border-bottom-right-radius:8px;letter-spacing:.5px}
+.chip.exc{background:var(--exc-bg);color:var(--exc)}
 .ex .t{font-style:italic;font-weight:600}.ex{opacity:.78}
 .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.grid .card{flex-direction:column;align-items:stretch;gap:8px;padding:10px;margin:0;min-width:0}.grid .meta{width:100%}.grid .acts{flex-wrap:wrap}
 .grid .cover{width:100%;height:auto;aspect-ratio:1}.grid .t{font-size:15px}.grid .a,.grid .d{font-size:13px}
@@ -395,12 +397,13 @@ function card(r){
   const list=onService?(r.dayPlaylist||r.monthPlaylist):'';
   const main=list||r.link||r.shazam||r.youtube||'';
   let img;if(r.cover){img=el('img','cover');img.loading='lazy';img.alt='';img.src=r.cover}else img=el('div','cover');
-  if(main){const l=el('a','cvl');l.href=main;l.append(img);a.append(l)}else a.append(img);
+  const cw=el('div','cvw');if(main){const l=el('a','cvl');l.href=main;l.append(img);cw.append(l)}else cw.append(img);
+  if(r.status==='Excerpt')cw.append(el('span','ribbon','EXTRAIT'));a.append(cw);
   const m=el('div','meta');const an=el('div','a lnk',r.artist);an.onclick=()=>openArtist(r.artist);m.append(el('div','t',r.title),an);
   const alb=[r.album,r.year].filter(Boolean).join(' · ');
   m.append(el('div','d',dateLine(r)));
-  const extra=[r.status==='Excerpt'?'Extrait court':'',alb,r.position].filter(Boolean).join(' · ');if(extra)m.append(el('div','d',extra));
-  if(r.genre||r.mood){const c=el('div','chips');if(r.genre)c.append(el('span','chip genre',r.genre));if(r.mood)c.append(el('span','chip '+r.mood,r.mood));m.append(c)}
+  const extra=[alb,r.position].filter(Boolean).join(' · ');if(extra)m.append(el('div','d',extra));
+  if(r.genre||r.mood||r.status==='Excerpt'){const c=el('div','chips');if(r.status==='Excerpt')c.append(el('span','chip exc','✂️ Extrait'));if(r.genre)c.append(el('span','chip genre',r.genre));if(r.mood)c.append(el('span','chip '+r.mood,r.mood));m.append(c)}
   const acts=el('div','acts');
   if(list){const x=el('a',null,r.dayPlaylist?'▶ Playlist du jour':'▶ Playlist du mois');x.href=list;acts.append(x)}
   // The track link opens the album, like the Album button: only kept when there is no album link.
