@@ -3,7 +3,7 @@
 // this device's keychain (asked once); it never appears in this file.
 // Widget: add a Scriptable widget to the home screen and choose this script.
 
-const VERSION = "2026-11-20 · 16";   // shown at the bottom of the app
+const VERSION = "2026-11-20 · 17";   // shown at the bottom of the app
 const KEY = "radio_soirees_notion_key";
 const HISTORY_DB = "1099479c43a944e0a358727716a0d49b";
 const MISSING_DB = "0cfa728c14294956be448e18eb460be1";
@@ -480,6 +480,7 @@ function render(){const M=document.getElementById('main');M.replaceChildren();
 function setTab(){view=null;trail=[];document.querySelectorAll('.seg button').forEach(b=>b.classList.toggle('on',b.dataset.tab===tab));render();window.scrollTo(0,0)}
 document.querySelectorAll('.seg button').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;setTab()});
 render();
+if(D.open)openArtist(D.open);
 </script></body></html>`;
 }
 
@@ -495,6 +496,8 @@ async function app(data) {
     return true;
   };
   data.version = VERSION;
+  // Opened from a notification: scriptable:///run/<script>?artist=<name> shows that artist's page.
+  data.open = (args.queryParameters && args.queryParameters.artist) || "";
   await wv.loadHTML(html(data));
   await wv.present(true);
 }

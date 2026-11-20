@@ -186,6 +186,17 @@ class Moods(unittest.TestCase):
                          ["Radio Rock 80s", "Radio Pop/Rock 2000s"])
 
 
+class AppLink(unittest.TestCase):
+    def test_link_opens_the_app_on_the_artist(self):
+        self.assertEqual(r.app_link({"app_link_script": "Radio Soirées"}, "Guns N' Roses"),
+                         "scriptable:///run/Radio%20Soir%C3%A9es?artist=Guns+N%27+Roses")
+
+    def test_no_link_without_script_name_or_artist(self):
+        self.assertEqual(r.app_link({}, "A"), "")
+        self.assertEqual(r.app_link({"app_link_script": " "}, "A"), "")
+        self.assertEqual(r.app_link({"app_link_script": "X"}, ""), "")
+
+
 class ShowStart(unittest.TestCase):
     def test_tracks_back_to_back_before_the_show_are_ignored(self):
         d = r.StartDetector(True)

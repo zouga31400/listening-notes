@@ -6,7 +6,7 @@ import sys
 import time
 import unicodedata
 from datetime import datetime, timedelta
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus
 from zoneinfo import ZoneInfo
 
 import requests
@@ -699,6 +699,15 @@ def track_position(match):
     if disc > 1:
         return f"CD{disc} · piste {number}"
     return f"Piste {number}/{total}" if total >= number else f"Piste {number}"
+
+
+def app_link(config, artist):
+    """Link that opens the Radio Soirées app (a Scriptable script) on the artist page, or "".
+    The script name comes from app_link_script in config.txt (empty = no link)."""
+    name = (config.get("app_link_script") or "").strip()
+    if not name or not artist:
+        return ""
+    return f"scriptable:///run/{quote(name)}?artist={quote_plus(artist)}"
 
 
 def youtube_link(artist, title):
@@ -1400,10 +1409,12 @@ async def main(offshow=None):
                      else "First time heard.")
         web = os.environ.get("MUSIC_WEB_URL", "").strip().rstrip("/")
         service_url = f"{web}/track/{match['id']}" if (web and match) else None
+        app_url = app_link(config, artist)
         notify(f"{title} — {artist}", "\n".join(lines),
                tags=["warning"] if match is None else ["musical_note"],
-               click=service_url or track.get("url"), image=track_image(track, match),
-               actions=[("Open in the music app", service_url), ("Shazam", track.get("url"))])
+               click=app_url or service_url or track.get("url"), image=track_image(track, match),
+               actions=[("Open the app", app_url), ("Open in the music app", service_url),
+                        ("Shazam", track.get("url"))])
         if history:
             try:
                 offset = float(item["out"]["matches"][0]["offset"])
