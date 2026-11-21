@@ -1072,14 +1072,21 @@ class StartDetector:
     """Detects the start of the show. Before it, the station plays music back to back
     (no speech): those tracks are not part of the show and are ignored. The show starts
     with the first track that is not directly preceded by another track, i.e. after
-    speech (the host, a jingle, an announcement)."""
+    speech (the host, a jingle, an announcement), or after the recorded message of the show
+    when its words are known (Notion database "Radio - Messages")."""
 
-    def __init__(self, active):
+    def __init__(self, active, wait_message=False):
         self.started = not active
+        self.wait_message = wait_message   # the show starts with its recorded message, not any speech
         self.speech = False      # was there speech since the last ignored track?
         self.ignored = []        # tracks played before the show
 
     def on_speech(self):
+        if not self.wait_message:
+            self.speech = True
+
+    def on_message(self):
+        """The recorded message that opens the show was heard."""
         self.speech = True
 
     def accept(self, item):
@@ -1147,6 +1154,24 @@ def compute_window(config):
     if end - now > timedelta(hours=5, minutes=50):      # GitHub stops a job after 6 hours
         end = now + timedelta(hours=5, minutes=50)
     return listen_from, end
+
+
+def messages_load(db_id):
+    """{"Start": [phrases], "End": [phrases]} from the Notion database "Radio - Messages"."""
+    headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28",
+               "Content-Type": "application/json"}
+    resp = requests.post(f"{NOTION_API}/databases/{db_id.replace('-', '')}/query",
+                         headers=headers, json={"page_size": 50}, timeout=30)
+    resp.raise_for_status()
+    out = {"Start": [], "End": []}
+    for page in resp.json().get("results", []):
+        props = page.get("properties") or {}
+        kind = ((props.get("Kind") or {}).get("select") or {}).get("name")
+        phrase = "".join(t.get("plain_text", "")
+                         for t in (props.get("Phrase") or {}).get("rich_text", [])).strip()
+        if kind in out and phrase:
+            out[kind].append(phrase)
+    return out
 
 
 def endmsg_load(db_id, today, days=6):
@@ -1339,18 +1364,27 @@ async def main(offshow=None):
     msg_end_at = None       # when the recorded message was heard (it ends the show)
     # Speech to text of the samples that are not music after midnight (text kept in Notion), and
     # the phrase of config.txt that ends the show when it is heard.
-    end_phrase = (config.get("end_phrase") or "").strip()
+    # The words of the recorded messages are not in the repository: they are in Notion.
+    start_phrases, end_phrases = [], []
+    if config.get("notion_messages_db") and NOTION_TOKEN and not TEST_MODE:
+        try:
+            found = messages_load(config["notion_messages_db"])
+            start_phrases, end_phrases = found["Start"], found["End"]
+        except Exception as e:
+            log(f"Recorded messages not available ({type(e).__name__})")
     asr = (speech is not None and endmsg_db and NOTION_TOKEN and not TEST_MODE
            and (config.get("speech_to_text") or "on").lower() != "off" and speech.available())
     speech_log = []         # (time, text) of what was said
     near_samples = []       # signatures kept for learning
+    start_msg_at = None     # when the recorded message that opens the show was heard
     if asr:
-        log("Speech to text on" + (", end phrase set" if end_phrase else ""))
+        log(f"Speech to text on ({len(start_phrases)} start message(s), {len(end_phrases)} end message(s) set)")
 
     hour, minute = parse_hhmm(config.get("show_start_until"), (21, 30))
     start_until = start.replace(hour=hour, minute=minute, second=0, microsecond=0)
     starter = StartDetector(active=not TEST_MODE and start < start_until
-                            and config.get("show_start_until", "").lower() != "off")
+                            and config.get("show_start_until", "").lower() != "off",
+                            wait_message=bool(start_phrases) and bool(asr))
     if not starter.started:
         log(f"Show start detection until {start_until:%H:%M}: tracks played back to back "
             "before the first speech are ignored")
@@ -1581,12 +1615,18 @@ async def main(offshow=None):
                     keep_excerpt(pending)
                     pending = None
             if not track:
-                if asr and sample_start >= detect_from:
+                if asr and (sample_start >= detect_from or not starter.started):
                     try:
                         said = await asyncio.to_thread(speech.transcribe, "sample.mp3")
                         if said:
                             speech_log.append((sample_start, said))
-                        if end_phrase and said and speech.phrase_hit(said, end_phrase) and len(recap) >= 5:
+                        if (said and not starter.started and start_msg_at is None
+                                and any(speech.phrase_hit(said, p) for p in start_phrases)):
+                            start_msg_at = sample_start
+                            starter.on_message()
+                            log("Show start message heard")
+                        if (said and sample_start >= detect_from and len(recap) >= 5
+                                and any(speech.phrase_hit(said, p) for p in end_phrases)):
                             msg_end_at = sample_start
                             for held in detector.finish():
                                 held["current"] = False
@@ -1657,8 +1697,9 @@ async def main(offshow=None):
                                 # Show start: when the music before it ended (the speech starts
                                 # there), else when this first track started.
                                 first = song_start or item["sample_start"]
-                                begin = (previous_end if not was_started and starter.ignored
-                                         and previous_end and previous_end < first else first)
+                                begin = start_msg_at or (
+                                    previous_end if not was_started and starter.ignored
+                                    and previous_end and previous_end < first else first)
                                 try:
                                     show_page = shows.add_show(
                                         start.date(), begin,

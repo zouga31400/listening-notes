@@ -218,6 +218,21 @@ class ShowStart(unittest.TestCase):
         self.assertTrue(d.accept("A"))
 
 
+class ShowStartMessage(unittest.TestCase):
+    def test_waiting_for_the_message_ignores_other_speech(self):
+        d = r.StartDetector(True, wait_message=True)
+        d.on_speech()                       # the host speaks before the show
+        self.assertFalse(d.accept("A"))
+        d.on_message()                      # the recorded message of the show
+        self.assertTrue(d.accept("B"))
+        self.assertEqual(d.ignored, ["A"])
+
+    def test_without_phrase_any_speech_starts_the_show(self):
+        d = r.StartDetector(True)
+        d.on_speech()
+        self.assertTrue(d.accept("A"))
+
+
 class ShowEnd(unittest.TestCase):
     def test_run_of_three_ends_the_show_before_the_run(self):
         d = r.EndDetector(3)
