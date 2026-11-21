@@ -41,6 +41,11 @@ jobs:
         with:
           path: ~/ffmpeg
           key: ffmpeg-static-v1
+      - name: Restore the speech model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-base-v1
       - name: Install the tools
         run: |
           # Prebuilt static ffmpeg, kept in the cache: seconds instead of minutes of apt.
@@ -61,5 +66,11 @@ jobs:
           fi
           # Pinned versions: an untested upgrade cannot break an evening.
           pip install -q shazamio==0.9.0 shazamio-core==2.0.0 requests librosa==0.11.0
+          # Optional speech to text (the model is kept in the cache); without it nothing changes.
+          pip install -q faster-whisper==1.1.1 || echo "faster-whisper unavailable"
+          python - <<'PY' || echo "speech model unavailable"
+          from faster_whisper import WhisperModel
+          WhisperModel("base", device="cpu", compute_type="int8")
+          PY
       - name: Listen, recognize, add
         run: python radio_listen.py

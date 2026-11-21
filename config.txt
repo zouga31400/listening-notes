@@ -48,6 +48,11 @@ notion_artists_db = 41d481d1393d81b095ece915e9b186b9
 # evenings before (only small audio signatures are kept, in this Notion database). Hearing it
 # ends the show at once. "off" switches it off.
 end_message = on
+# Speech to text: after midnight, what is said in the samples that are not music is written
+# in the same Notion database (column Transcript) so that the announcement ending the show can
+# be read there. end_phrase: a few words of that announcement; hearing them ends the show.
+speech_to_text = on
+end_phrase =
 notion_endmsg_db = 41f481d1393d81149945c112c38d4cc3
 
 # Notion database of the evenings: the show start and end found by the detectors, to the
