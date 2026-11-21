@@ -11,6 +11,11 @@ from zoneinfo import ZoneInfo
 
 import requests
 
+try:
+    import endmessage      # needs numpy (installed with librosa)
+except Exception:          # without it the end message is simply not recognized
+    endmessage = None
+
 # The music service is configured through secrets so that the repository never names it:
 # MUSIC_API_URL (API base URL) and MUSIC_APP_ID (application ID).
 API = os.environ.get("MUSIC_API_URL", "").strip().rstrip("/")
@@ -1140,6 +1145,49 @@ def compute_window(config):
     return listen_from, end
 
 
+def endmsg_load(db_id, today, days=6):
+    """{day: [signatures]} of the last evenings stored in the "End messages" database."""
+    headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28",
+               "Content-Type": "application/json"}
+    resp = requests.post(f"{NOTION_API}/databases/{db_id.replace('-', '')}/query", headers=headers,
+                         json={"page_size": days + 1, "sorts": [
+                             {"timestamp": "created_time", "direction": "descending"}]}, timeout=30)
+    resp.raise_for_status()
+    out = {}
+    for page in resp.json().get("results", []):
+        props = page.get("properties") or {}
+        day = "".join(t.get("plain_text", "") for t in (props.get("Name") or {}).get("title", []))
+        text = "".join(t.get("plain_text", "") for t in (props.get("Features") or {}).get("rich_text", []))
+        if day and day != today and text:
+            samples = endmessage.loads(text)
+            if samples:
+                out[day] = samples
+    return out
+
+
+def endmsg_save(db_id, day, samples):
+    """Writes (or replaces) the signatures kept for this evening."""
+    headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28",
+               "Content-Type": "application/json"}
+    base = f"{NOTION_API}/databases/{db_id.replace('-', '')}"
+    text = endmessage.dumps(samples)
+    parts = [text[i:i + 1900] for i in range(0, len(text), 1900)][:100]
+    props = {"Features": {"rich_text": [{"text": {"content": p}} for p in parts]},
+             "Samples": {"number": len(samples)}}
+    found = requests.post(f"{base}/query", headers=headers, timeout=30, json={
+        "filter": {"property": "Name", "title": {"equals": day}}, "page_size": 1})
+    found.raise_for_status()
+    rows = found.json().get("results", [])
+    if rows:
+        resp = requests.patch(f"{NOTION_API}/pages/{rows[0]['id']}", headers=headers, timeout=30,
+                              json={"properties": props})
+    else:
+        resp = requests.post(f"{NOTION_API}/pages", headers=headers, timeout=30, json={
+            "parent": {"database_id": db_id.replace("-", "")},
+            "properties": {"Name": {"title": [{"text": {"content": day}}]}, **props}})
+    resp.raise_for_status()
+
+
 async def main(offshow=None):
     """The evening show. `offshow` (radio_offshow.py, always-on machine only) receives the
     tracks played outside the show: before its detected start and after its detected end."""
@@ -1267,6 +1315,20 @@ async def main(offshow=None):
     log(f"Show end detection from {detect_from:%H:%M}: {detector.streak} tracks in a row, "
         f"listening at most until {end:%H:%M}")
 
+    # The announcement recorded after the last title of the show (the same every day), learned
+    # from the evenings before: hearing it ends the show at once.
+    endmsg_db = (config.get("notion_endmsg_db") or "").strip()
+    endmsg = None
+    if (endmessage and endmsg_db and NOTION_TOKEN and not TEST_MODE
+            and (config.get("end_message") or "on").lower() != "off"):
+        try:
+            known = endmsg_load(endmsg_db, f"{start:%Y-%m-%d}")
+            endmsg = {"refs": endmessage.learn(known), "recent": [], "days": len(known)}
+            log(f"End message: {len(known)} evening(s) known, {len(endmsg['refs'])} reference(s)")
+        except Exception as e:
+            log(f"End message not available ({type(e).__name__})")
+    msg_end_at = None       # when the recorded message was heard (it ends the show)
+
     hour, minute = parse_hhmm(config.get("show_start_until"), (21, 30))
     start_until = start.replace(hour=hour, minute=minute, second=0, microsecond=0)
     starter = StartDetector(active=not TEST_MODE and start < start_until
@@ -1284,6 +1346,7 @@ async def main(offshow=None):
     outage_start = 0.0
     on_backup = False
     last_song_end = None    # estimated end of the last confirmed song
+    last_kept_end = None    # estimated end of the last track kept
     pending = None      # first sighting of a track waiting for confirmation
     recap = []          # "symbol Artist - Title" lines for the end-of-session notification
     excerpt_count = 0
@@ -1325,7 +1388,13 @@ async def main(offshow=None):
 
     def keep(item):
         """Adds a confirmed track to the playlists, Notion and the notifications."""
-        nonlocal noted, logged
+        nonlocal noted, logged, last_kept_end
+        try:
+            _, song_end_ = song_bounds(item["out"], durations.get(item["key"]), item["sample_start"])
+            if song_end_ and (last_kept_end is None or song_end_ > last_kept_end):
+                last_kept_end = song_end_
+        except Exception:
+            pass
         artist, title, track, match = item["artist"], item["title"], item["track"], item["match"]
         status, album_name, duration = "Not found", None, None
         if match is None:
@@ -1463,6 +1532,24 @@ async def main(offshow=None):
                        tags=["white_check_mark"])
             stream_errors = 0
             sample_end = time.time()
+            if endmsg is not None and sample_start >= detect_from:
+                try:
+                    feats = endmessage.file_features("sample.mp3")
+                    endmsg["recent"].append((sample_start, feats))
+                    del endmsg["recent"][:-60]
+                    hit = endmessage.find(endmsg["refs"], feats) if endmsg["refs"] else None
+                    if hit and len(recap) >= 5:
+                        _, at_frame, ref_frame = hit
+                        msg_end_at = sample_start + timedelta(
+                            seconds=(at_frame - ref_frame) / endmessage.FPS)
+                        for held in detector.finish():      # titles before the message are the show's
+                            held["current"] = False
+                            keep(held)
+                        detector.ended = True
+                        break
+                except Exception as e:
+                    log(f"   End message check failed ({type(e).__name__})")
+                    endmsg = None
             out = await asyncio.wait_for(shazam.recognize("sample.mp3"), timeout=40)
             track = out.get("track")
             key = None
@@ -1612,7 +1699,10 @@ async def main(offshow=None):
             show_end = first["sample_start"] - timedelta(seconds=max(0, offset))
         except (TypeError, KeyError, IndexError, ValueError):
             show_end = ended_at
-        log(f"Show end detected at {ended_at:%H:%M} ({detector.streak} tracks in a row), "
+        how = f"{detector.streak} tracks in a row"
+        if msg_end_at:
+            show_end, how = msg_end_at, "recorded message heard"
+        log(f"Show end detected at {ended_at:%H:%M} ({how}), "
             f"show ended around {show_end:%H:%M}")
         if offshow:
             for item in detector.dropped:
@@ -1629,8 +1719,21 @@ async def main(offshow=None):
                tags=["show_end"], topic=SHOW_END_TOPIC or None)
         if SHOW_END_TOPIC:   # the signal went to another topic: tell the user too
             notify("Radio listening: show ended",
-                   f"End of the show detected at {ended_at:%H:%M} ({detector.streak} tracks "
-                   f"in a row); the show ended around {show_end:%H:%M}.", tags=["show_end"])
+                   f"End of the show detected at {ended_at:%H:%M} ({how}); "
+                   f"the show ended around {show_end:%H:%M}.", tags=["show_end"])
+        if endmsg is not None:
+            # Keep the signatures of the samples heard between the last title and the music that
+            # follows: the part that two evenings share is the recorded message.
+            try:
+                lo = (last_kept_end or show_end - timedelta(minutes=2)) - timedelta(seconds=15)
+                hi = show_end + timedelta(seconds=5)
+                near = [f for t, f in endmsg["recent"]
+                        if t + timedelta(seconds=15) >= lo and t <= hi][-6:]
+                if near:
+                    endmsg_save(endmsg_db, f"{start:%Y-%m-%d}", near)
+                    log(f"   End message: {len(near)} sample(s) kept for learning")
+            except Exception as e:
+                log(f"   End message not kept ({type(e).__name__})")
     else:
         log(f"No show end detected, stopped at the time limit ({ended_at:%H:%M})")
         if shows and show_page:

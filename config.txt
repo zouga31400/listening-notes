@@ -44,6 +44,12 @@ notion_history_db = 1099479c43a944e0a358727716a0d49b
 # Notion artists database: one row per artist heard (biography, albums, influences, similar).
 notion_artists_db = 41d481d1393d81b095ece915e9b186b9
 
+# End message: the announcement recorded after the last title of the show, learned from the
+# evenings before (only small audio signatures are kept, in this Notion database). Hearing it
+# ends the show at once. "off" switches it off.
+end_message = on
+notion_endmsg_db = 41f481d1393d81149945c112c38d4cc3
+
 # Notion database of the evenings: the show start and end found by the detectors, to the
 # second (one row per evening). Leave empty to switch it off.
 notion_shows_db = 41d481d1393d8104ae44d71455c86767
