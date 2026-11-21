@@ -48,11 +48,14 @@ notion_artists_db = 41d481d1393d81b095ece915e9b186b9
 # evenings before (only small audio signatures are kept, in this Notion database). Hearing it
 # ends the show at once. "off" switches it off.
 end_message = on
-# Speech to text: after midnight, what is said in the samples that are not music is written
-# in the same Notion database (column Transcript) so that the announcement ending the show can
-# be read there. end_phrase: a few words of that announcement; hearing them ends the show.
+# Speech to text: what is said in the samples that are not music is written in the same Notion
+# database (column Transcript): before the show start (until show_start_until) and after
+# midnight, so that the recorded messages of the show can be read there.
 speech_to_text = on
-end_phrase =
+# The words of the recorded messages (start and end of the show) are in the Notion database
+# "Radio - Messages" (not here: they belong to the show). Hearing the start message starts the
+# show, hearing the end message ends it.
+notion_messages_db = 41f481d1393d8102b967f50544adf32d
 notion_endmsg_db = 41f481d1393d81149945c112c38d4cc3
 
 # Notion database of the evenings: the show start and end found by the detectors, to the
