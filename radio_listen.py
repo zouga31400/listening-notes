@@ -15,6 +15,10 @@ try:
     import endmessage      # needs numpy (installed with librosa)
 except Exception:          # without it the end message is simply not recognized
     endmessage = None
+try:
+    import speech          # optional: faster-whisper (speech to text)
+except Exception:
+    speech = None
 
 # The music service is configured through secrets so that the repository never names it:
 # MUSIC_API_URL (API base URL) and MUSIC_APP_ID (application ID).
@@ -1165,15 +1169,20 @@ def endmsg_load(db_id, today, days=6):
     return out
 
 
-def endmsg_save(db_id, day, samples):
-    """Writes (or replaces) the signatures kept for this evening."""
+def endmsg_save(db_id, day, samples=None, transcript=""):
+    """Writes (or replaces) what is kept for this evening: the signatures and the text."""
     headers = {"Authorization": f"Bearer {NOTION_TOKEN}", "Notion-Version": "2022-06-28",
                "Content-Type": "application/json"}
     base = f"{NOTION_API}/databases/{db_id.replace('-', '')}"
-    text = endmessage.dumps(samples)
-    parts = [text[i:i + 1900] for i in range(0, len(text), 1900)][:100]
-    props = {"Features": {"rich_text": [{"text": {"content": p}} for p in parts]},
-             "Samples": {"number": len(samples)}}
+    props = {}
+    if samples:
+        text = endmessage.dumps(samples)
+        parts = [text[i:i + 1900] for i in range(0, len(text), 1900)][:100]
+        props["Features"] = {"rich_text": [{"text": {"content": p}} for p in parts]}
+        props["Samples"] = {"number": len(samples)}
+    if transcript:
+        parts = [transcript[i:i + 1900] for i in range(0, len(transcript), 1900)][:100]
+        props["Transcript"] = {"rich_text": [{"text": {"content": p}} for p in parts]}
     found = requests.post(f"{base}/query", headers=headers, timeout=30, json={
         "filter": {"property": "Name", "title": {"equals": day}}, "page_size": 1})
     found.raise_for_status()
@@ -1328,6 +1337,15 @@ async def main(offshow=None):
         except Exception as e:
             log(f"End message not available ({type(e).__name__})")
     msg_end_at = None       # when the recorded message was heard (it ends the show)
+    # Speech to text of the samples that are not music after midnight (text kept in Notion), and
+    # the phrase of config.txt that ends the show when it is heard.
+    end_phrase = (config.get("end_phrase") or "").strip()
+    asr = (speech is not None and endmsg_db and NOTION_TOKEN and not TEST_MODE
+           and (config.get("speech_to_text") or "on").lower() != "off" and speech.available())
+    speech_log = []         # (time, text) of what was said
+    near_samples = []       # signatures kept for learning
+    if asr:
+        log("Speech to text on" + (", end phrase set" if end_phrase else ""))
 
     hour, minute = parse_hhmm(config.get("show_start_until"), (21, 30))
     start_until = start.replace(hour=hour, minute=minute, second=0, microsecond=0)
@@ -1563,6 +1581,21 @@ async def main(offshow=None):
                     keep_excerpt(pending)
                     pending = None
             if not track:
+                if asr and sample_start >= detect_from:
+                    try:
+                        said = await asyncio.to_thread(speech.transcribe, "sample.mp3")
+                        if said:
+                            speech_log.append((sample_start, said))
+                        if end_phrase and said and speech.phrase_hit(said, end_phrase) and len(recap) >= 5:
+                            msg_end_at = sample_start
+                            for held in detector.finish():
+                                held["current"] = False
+                                keep(held)
+                            detector.ended = True
+                            break
+                    except Exception as e:
+                        log(f"   Speech to text failed ({type(e).__name__})")
+                        asr = False
                 # Speech (or anything that is not a known track): held tracks belong to the show.
                 starter.on_speech()
                 for item in detector.on_speech():
@@ -1702,6 +1735,7 @@ async def main(offshow=None):
         how = f"{detector.streak} tracks in a row"
         if msg_end_at:
             show_end, how = msg_end_at, "recorded message heard"
+            speech_log.append((ended_at, f"[end of the show detected: {how}]"))
         log(f"Show end detected at {ended_at:%H:%M} ({how}), "
             f"show ended around {show_end:%H:%M}")
         if offshow:
@@ -1729,9 +1763,7 @@ async def main(offshow=None):
                 hi = show_end + timedelta(seconds=5)
                 near = [f for t, f in endmsg["recent"]
                         if t + timedelta(seconds=15) >= lo and t <= hi][-6:]
-                if near:
-                    endmsg_save(endmsg_db, f"{start:%Y-%m-%d}", near)
-                    log(f"   End message: {len(near)} sample(s) kept for learning")
+                near_samples = near
             except Exception as e:
                 log(f"   End message not kept ({type(e).__name__})")
     else:
@@ -1745,6 +1777,15 @@ async def main(offshow=None):
         for item in detector.finish():
             item["current"] = False
             keep(item)
+        speech_log.append((ended_at, "[no end detected: time limit]"))
+
+    if endmsg_db and NOTION_TOKEN and not TEST_MODE and (near_samples or speech_log):
+        try:
+            text = "\n".join(f"{t:%H:%M:%S}  {w}" for t, w in speech_log[-400:])
+            endmsg_save(endmsg_db, f"{start:%Y-%m-%d}", near_samples, text)
+            log(f"   End message: {len(near_samples)} sample(s) and {len(speech_log)} text line(s) kept")
+        except Exception as e:
+            log(f"   End message not saved ({type(e).__name__})")
 
     log(f"Listening finished: {recognized} recognitions"
         + (f", {unconfirmed} not confirmed" if unconfirmed else ""))
