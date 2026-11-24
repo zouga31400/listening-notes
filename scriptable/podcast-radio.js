@@ -7,7 +7,7 @@
 // open the episodes containing them).
 // Reset the address: run the script with the parameter reset=1.
 
-const VERSION = "2026-11-20 · 2";   // shown at the bottom of the app
+const VERSION = "2026-11-24 · 3";   // shown at the bottom of the app
 const KEY = "podcast_radio_feed_url";
 const fm = FileManager.local();
 const DIR = fm.joinPath(fm.documentsDirectory(), "podcast-radio");
@@ -59,9 +59,10 @@ function parseTitle(title) {
 }
 
 // Description: sections "Mots-clés :", "Claude :", "Mistral :", "Résumé :", "Titres diffusés :"
-const HEADER = /^(Mots-clés|Keywords|Claude|Mistral|Résumé|Summary|Titres diffusés|Tracks played) ?:$/;
+const HEADER = /^(Mots-clés|Keywords|Claude|Mistral|Résumé|Summary|Titres diffusés|Tracks played|Dessin|Drawing) ?:$/;
 const SECTION_KEY = {"Mots-clés": "keywords", "Keywords": "keywords", "Claude": "claude", "Mistral": "local",
-  "Résumé": "summary", "Summary": "summary", "Titres diffusés": "tracks", "Tracks played": "tracks"};
+  "Résumé": "summary", "Summary": "summary", "Titres diffusés": "tracks", "Tracks played": "tracks",
+  "Dessin": "drawing", "Drawing": "drawing"};
 function sections(text) {
   const out = {};
   let key = "summary", lines = [];
@@ -99,7 +100,8 @@ function parseFeed(xml) {
     }
     items.push({id, title, ...when, duration, image: field(x, /<itunes:image href="([^"]*)"/),
       keywords: keywordList(s.keywords), claude: s.claude || "", local: s.local || "",
-      summary: s.summary || "", tracks: s.tracks || ""});
+      summary: s.summary || "", tracks: s.tracks || "",
+      drawing: ((s.drawing || "").match(/https?:\/\/\S+/) || [""])[0]});
   }
   return items;
 }
@@ -114,15 +116,16 @@ function saveArchive(a) {
   try { ensureDirs(); fm.writeString(ARCHIVE, JSON.stringify(a)); } catch (e) {}
 }
 const coverPath = (id) => fm.joinPath(COVERS, id.replace(/[^A-Za-z0-9_-]/g, "") + ".jpg");
+const drawingPath = (id) => fm.joinPath(COVERS, id.replace(/[^A-Za-z0-9_-]/g, "") + "-dessin.jpg");
 
 // Downloads a picture and keeps a small JPEG copy.
-async function saveSmall(url, path) {
+async function saveSmall(url, path, side = COVER_SIDE) {
   try {
     const r = new Request(url);
     r.timeoutInterval = 20;
     const img = await r.loadImage();
     const w = img.size.width, h = img.size.height;
-    const k = Math.min(1, COVER_SIDE / Math.max(w, h));
+    const k = Math.min(1, side / Math.max(w, h));
     const dc = new DrawContext();
     dc.size = new Size(Math.round(w * k), Math.round(h * k));
     dc.respectScreenScale = false;
@@ -136,8 +139,10 @@ async function saveSmall(url, path) {
 // Episode cover, once (Drive deletes it after 14 days).
 async function keepCover(ep) {
   const path = coverPath(ep.id);
-  if (!ep.image || fm.fileExists(path)) return;
-  await saveSmall(ep.image, path);
+  if (ep.image && !fm.fileExists(path)) await saveSmall(ep.image, path);
+  // The drawing of the day, when the description gives one ("Dessin :" section).
+  const dp = drawingPath(ep.id);
+  if (ep.drawing && !fm.fileExists(dp)) await saveSmall(ep.drawing, dp, 720);
 }
 
 // The podcast logo is the artwork of the feed (channel picture): kept again when it changes.
@@ -151,6 +156,13 @@ async function keepLogo(archive, url) {
 function logoUri() {
   try { return fm.fileExists(LOGO) ? "data:image/jpeg;base64," + Data.fromFile(LOGO).toBase64String() : ""; }
   catch (e) { return ""; }
+}
+
+function drawingUri(id) {
+  try {
+    const p = drawingPath(id);
+    return fm.fileExists(p) ? "data:image/jpeg;base64," + Data.fromFile(p).toBase64String() : "";
+  } catch (e) { return ""; }
 }
 
 function coverUri(id) {
@@ -202,7 +214,7 @@ async function loadData() {
     id: e.id, title: e.title, date: e.date, from: e.from, to: e.to, duration: e.duration,
     keywords: e.keywords || [], claude: e.claude || "", local: e.local || "",
     summary: e.summary || "", tracks: e.tracks || "", available: !!e.inFeed,
-    cover: coverUri(e.id),
+    cover: coverUri(e.id), drawing: drawingUri(e.id),
   }));
   if (!episodes.length) { const e = new Error("empty"); e.code = 0; throw e; }
   return {episodes, offline, at: archive.at || "", logo: logoUri()};
@@ -334,6 +346,12 @@ function page(D) {
     d.append(back);
     const wrap = el("div", "dwrap");
     wrap.append(cover(e, "dcover"));
+    if (e.drawing) {
+      const dr = el("figure", "drawing"), im = el("img");
+      im.alt = ""; im.src = e.drawing;
+      dr.append(im, el("figcaption", null, "Dessin du jour"));
+      wrap.append(dr);
+    }
     wrap.append(el("h2", "dt", cap(fmt(e.date, {weekday: "long", day: "numeric", month: "long", year: "numeric"}))));
     wrap.append(el("div", "d", meta(e)));
     if (e.available) {
@@ -543,6 +561,7 @@ h3{margin:18px 0 8px;font-size:12px;color:var(--accent-text);text-transform:uppe
 #detail{position:fixed;inset:0;background:var(--bg);overflow-y:auto;z-index:5;padding:calc(env(safe-area-inset-top) + 8px) max(16px,env(safe-area-inset-right)) calc(env(safe-area-inset-bottom) + 28px) max(16px,env(safe-area-inset-left))}
 #detail[hidden]{display:none}.back{border:0;background:none;color:var(--accent-text);font:inherit;font-size:17px;font-weight:600;padding:8px 0;position:sticky;top:0}
 .dwrap{max-width:640px;margin:0 auto}.dcover{display:block;width:min(100%,260px);aspect-ratio:1;object-fit:cover;border-radius:18px;margin:6px auto 14px;box-shadow:0 0 0 2px var(--accent),0 8px 26px rgba(225,6,0,.3);background:linear-gradient(135deg,#3a1210,#141414)}
+.drawing{margin:0 auto 14px;max-width:420px;text-align:center}.drawing img{width:100%;border-radius:14px;box-shadow:0 0 0 1px rgba(225,6,0,.4)}.drawing figcaption{font-size:12px;color:var(--muted);margin-top:4px}
 .dcover.none{height:0;aspect-ratio:auto;margin:0;box-shadow:none}.dt{margin:6px 0 2px;font-size:26px;color:#fff;border:0;padding:0}
 .sum p{margin:10px 0;line-height:1.45}.sum ul{padding-left:18px;margin:8px 0}.sum li{margin:7px 0;line-height:1.4}.sum li::marker{color:var(--accent)}.sum b{color:var(--accent-text)}
 .pos{font-variant-numeric:tabular-nums;font-size:13px;font-weight:700;color:var(--accent-text);white-space:nowrap}
