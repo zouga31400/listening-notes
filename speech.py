@@ -17,13 +17,24 @@ def available():
         return False
 
 
+def _load(path):
+    """Mono samples at 16 kHz as float32. Done with ffmpeg: the audio decoder of faster-whisper
+    (PyAV) breaks with recent PyAV versions."""
+    import subprocess
+
+    import numpy as np
+    out = subprocess.run(["ffmpeg", "-v", "error", "-i", path, "-ac", "1", "-ar", "16000",
+                          "-f", "s16le", "-"], capture_output=True, check=True, timeout=60).stdout
+    return np.frombuffer(out, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def transcribe(path):
     """French text of an audio file, '' when nothing is said."""
     global _model
     if _model is None:
         from faster_whisper import WhisperModel
         _model = WhisperModel("base", device="cpu", compute_type="int8")
-    segments, _ = _model.transcribe(path, language="fr", beam_size=1,
+    segments, _ = _model.transcribe(_load(path), language="fr", beam_size=1,
                                     condition_on_previous_text=False)
     return " ".join(s.text.strip() for s in segments).strip()
 

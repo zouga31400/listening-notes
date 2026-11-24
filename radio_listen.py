@@ -1376,6 +1376,7 @@ async def main(offshow=None):
            and (config.get("speech_to_text") or "on").lower() != "off" and speech.available())
     speech_log = []         # (time, text) of what was said
     near_samples = []       # signatures kept for learning
+    asr_failures = 0
     start_msg_at = None     # when the recorded message that opens the show was heard
     if asr:
         log(f"Speech to text on ({len(start_phrases)} start message(s), {len(end_phrases)} end message(s) set)")
@@ -1634,8 +1635,10 @@ async def main(offshow=None):
                             detector.ended = True
                             break
                     except Exception as e:
-                        log(f"   Speech to text failed ({type(e).__name__})")
-                        asr = False
+                        asr_failures += 1
+                        log(f"   Speech to text failed ({type(e).__name__}: {str(e)[:100]})")
+                        if asr_failures >= 3:
+                            asr = False
                 # Speech (or anything that is not a known track): held tracks belong to the show.
                 starter.on_speech()
                 for item in detector.on_speech():
