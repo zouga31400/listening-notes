@@ -1089,6 +1089,11 @@ class StartDetector:
         """The recorded message that opens the show was heard."""
         self.speech = True
 
+    def give_up_waiting(self):
+        """The recorded message was not heard in time (stream outage, message missed between two
+        samples): back to the first speech, so that the tracks of the show are not lost."""
+        self.wait_message = False
+
     def accept(self, item):
         """True when the track belongs to the show; otherwise it is ignored."""
         if self.started:
@@ -1383,6 +1388,8 @@ async def main(offshow=None):
 
     hour, minute = parse_hhmm(config.get("show_start_until"), (21, 30))
     start_until = start.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    value = (config.get("start_message_wait") or "").strip()
+    message_wait = int(value) if value.isdigit() and int(value) > 0 else 8
     starter = StartDetector(active=not TEST_MODE and start < start_until
                             and config.get("show_start_until", "").lower() != "off",
                             wait_message=bool(start_phrases) and bool(asr))
@@ -1559,6 +1566,10 @@ async def main(offshow=None):
                 log(f"   Notion history failure ({type(e).__name__})")
 
     while datetime.now(PARIS) < end and not detector.ended:
+        if (not starter.started and starter.wait_message
+                and datetime.now(PARIS) >= start + timedelta(minutes=message_wait)):
+            starter.give_up_waiting()
+            log(f"Start message not heard within {message_wait} min: back to the first speech")
         if not starter.started and datetime.now(PARIS) >= start_until:
             starter.started = True
             log(f"No speech heard before {start_until:%H:%M}: the show is taken as started")

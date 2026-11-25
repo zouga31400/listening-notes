@@ -82,6 +82,10 @@ latest_end = 02:00
 # track after speech. If no speech is heard before show_start_until (Paris time), the
 # show is taken as started. "off" keeps every track from the start.
 show_start_until = 21:30
+# When the words of the start message are set in Notion, the show starts when that message is heard.
+# If it is not heard within this many minutes after the listening starts (stream outage, message
+# between two samples), the show starts at the first speech again, so that no track is lost.
+start_message_wait = 8
 
 # Short music excerpts played during the show (heard only once, between speech): they
 # go only to this playlist (created if missing) and to the Notion history with the

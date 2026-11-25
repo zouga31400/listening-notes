@@ -62,3 +62,27 @@ class Transcribe(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StartMessageFallback(unittest.TestCase):
+    """The show waits for its recorded message, but not for ever."""
+
+    def setUp(self):
+        os.environ.setdefault("STREAM_URL", "http://example.invalid/stream")
+
+    def test_speech_does_not_start_the_show_while_the_message_is_awaited(self):
+        import radio_listen as r
+        starter = r.StartDetector(active=True, wait_message=True)
+        starter.on_speech()
+        self.assertFalse(starter.accept({"title": "music before the show"}))
+        starter.on_message()
+        self.assertTrue(starter.accept({"title": "first track of the show"}))
+
+    def test_giving_up_goes_back_to_the_first_speech(self):
+        import radio_listen as r
+        starter = r.StartDetector(active=True, wait_message=True)
+        self.assertFalse(starter.accept({"title": "music"}))
+        starter.give_up_waiting()
+        starter.on_speech()
+        self.assertTrue(starter.accept({"title": "first track after speech"}))
+        self.assertEqual(len(starter.ignored), 1)
