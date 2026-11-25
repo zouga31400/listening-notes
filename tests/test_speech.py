@@ -86,3 +86,16 @@ class StartMessageFallback(unittest.TestCase):
         starter.on_speech()
         self.assertTrue(starter.accept({"title": "first track after speech"}))
         self.assertEqual(len(starter.ignored), 1)
+
+
+class PhraseMatching(unittest.TestCase):
+    PHRASE = "il est temps de reprendre ses activités quotidiennes demain matin avec le sourire"
+
+    def test_common_words_do_not_match(self):
+        # four words of the phrase are common in everyday talk: this must not end the show
+        self.assertFalse(speech.phrase_hit("bon il est temps de partir maintenant", self.PHRASE))
+        self.assertFalse(speech.phrase_hit("tu reprendre ses affaires demain matin", self.PHRASE))
+
+    def test_a_part_of_the_message_with_mistakes_matches(self):
+        self.assertTrue(speech.phrase_hit("il est temps de reprendre ses activité quotidienne", self.PHRASE))
+        self.assertTrue(speech.phrase_hit("de reprendre ses activités quotidiennes demain matin", self.PHRASE))

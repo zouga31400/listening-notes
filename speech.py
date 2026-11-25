@@ -44,9 +44,11 @@ def words(text):
     return re.sub(r"[^a-z0-9 ]+", " ", text).split()
 
 
-def phrase_hit(text, phrase, chunk=4, threshold=0.8):
+def phrase_hit(text, phrase, chunk=6, threshold=0.85):
     """True when the text contains a piece of the phrase: any `chunk` consecutive words of the
-    phrase that looks like the same words in the text (tolerates recognition mistakes)."""
+    phrase that looks like the same words in the text (tolerates recognition mistakes).
+    Six words, not fewer: with four, ordinary talk matches ("tout ce qui s'est", "il est temps de")
+    and ended the show in the middle of the evening."""
     t, p = words(text), words(phrase)
     if not t or not p:
         return False
