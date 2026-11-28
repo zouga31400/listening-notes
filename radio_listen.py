@@ -1626,30 +1626,33 @@ async def main(offshow=None):
                     unconfirmed += 1
                     keep_excerpt(pending)
                     pending = None
+            # Speech to text of every sample in the start window and after midnight, even when a
+            # track is "recognized": the recorded messages have a music bed that the recognition
+            # often takes for a track, so they would never be heard otherwise.
+            if asr and (sample_start >= detect_from or not starter.started):
+                try:
+                    said = await asyncio.to_thread(speech.transcribe, "sample.mp3")
+                    if said:
+                        speech_log.append((sample_start, ("♪ " if track else "") + said))
+                    if (said and not starter.started and start_msg_at is None
+                            and any(speech.phrase_hit(said, p) for p in start_phrases)):
+                        start_msg_at = sample_start
+                        starter.on_message()
+                        log("Show start message heard")
+                    if (said and sample_start >= detect_from and len(recap) >= 5
+                            and any(speech.phrase_hit(said, p) for p in end_phrases)):
+                        msg_end_at = sample_start
+                        for held in detector.finish():
+                            held["current"] = False
+                            keep(held)
+                        detector.ended = True
+                        break
+                except Exception as e:
+                    asr_failures += 1
+                    log(f"   Speech to text failed ({type(e).__name__}: {str(e)[:100]})")
+                    if asr_failures >= 3:
+                        asr = False
             if not track:
-                if asr and (sample_start >= detect_from or not starter.started):
-                    try:
-                        said = await asyncio.to_thread(speech.transcribe, "sample.mp3")
-                        if said:
-                            speech_log.append((sample_start, said))
-                        if (said and not starter.started and start_msg_at is None
-                                and any(speech.phrase_hit(said, p) for p in start_phrases)):
-                            start_msg_at = sample_start
-                            starter.on_message()
-                            log("Show start message heard")
-                        if (said and sample_start >= detect_from and len(recap) >= 5
-                                and any(speech.phrase_hit(said, p) for p in end_phrases)):
-                            msg_end_at = sample_start
-                            for held in detector.finish():
-                                held["current"] = False
-                                keep(held)
-                            detector.ended = True
-                            break
-                    except Exception as e:
-                        asr_failures += 1
-                        log(f"   Speech to text failed ({type(e).__name__}: {str(e)[:100]})")
-                        if asr_failures >= 3:
-                            asr = False
                 # Speech (or anything that is not a known track): held tracks belong to the show.
                 starter.on_speech()
                 for item in detector.on_speech():
